@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+.github
+
+# Virtual environments
+venv
+env
+ENV
+.venv
+
+# Testing
+
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+.kiro
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Debug logs (will be created at runtime)
+debug_logs/
+
+# CI/CD
+.clabot
+
+# Misc
+*.log

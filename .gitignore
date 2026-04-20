@@ -1,0 +1,19 @@
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+.shard/
+.kiro/
+
+# Debug logs (generated when DEBUG_MODE is enabled)
+debug_logs*/
+debug*.json
+
+# Project-specific
+_notes/
+requests/
+
+# Testing
