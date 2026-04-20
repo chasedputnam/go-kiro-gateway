@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/auth"
-	"github.com/jwadow/kiro-gateway/gateway/internal/cache"
-	"github.com/jwadow/kiro-gateway/gateway/internal/config"
-	"github.com/jwadow/kiro-gateway/gateway/internal/debug"
-	"github.com/jwadow/kiro-gateway/gateway/internal/resolver"
-	"github.com/jwadow/kiro-gateway/gateway/internal/server"
-	"github.com/jwadow/kiro-gateway/gateway/internal/truncation"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/auth"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/cache"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/debug"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/resolver"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/server"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/truncation"
 )
 
 // ---------------------------------------------------------------------------

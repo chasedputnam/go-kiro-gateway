@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/models"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
 )
 
 // DefaultTTL is the default cache time-to-live (1 hour).

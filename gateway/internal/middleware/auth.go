@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/errors"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/errors"
 )
 
 // apiKeyRoute describes how to extract and validate the API key for a

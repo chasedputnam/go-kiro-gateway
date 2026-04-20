@@ -10,10 +10,10 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/parser"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/thinking"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/tokenizer"
 	"github.com/google/uuid"
-	"github.com/jwadow/kiro-gateway/gateway/internal/parser"
-	"github.com/jwadow/kiro-gateway/gateway/internal/thinking"
-	"github.com/jwadow/kiro-gateway/gateway/internal/tokenizer"
 )
 
 // ---------------------------------------------------------------------------

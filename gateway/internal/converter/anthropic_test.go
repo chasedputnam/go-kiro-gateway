@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/config"
-	"github.com/jwadow/kiro-gateway/gateway/internal/models"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
 )
 
 // ---------------------------------------------------------------------------

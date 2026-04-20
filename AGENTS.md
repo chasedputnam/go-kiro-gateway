@@ -812,7 +812,7 @@ DEBUG_MODE="errors" python main.py
 - **README.md**: User-facing documentation
 - **tests/README.md**: Testing documentation
 - **.env.example**: Configuration template
-- **GitHub Issues**: https://github.com/jwadow/kiro-gateway/issues
+- **GitHub Issues**: https://github.com/chasedputnam/go-kiro-gateway/issues
 
 ## Summary
 

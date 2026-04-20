@@ -14,7 +14,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/converter"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/converter"
 	tiktoken "github.com/pkoukk/tiktoken-go"
 )
 

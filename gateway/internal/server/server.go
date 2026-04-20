@@ -10,15 +10,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/auth"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/cache"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/client"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/debug"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/middleware"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/resolver"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/truncation"
 	"github.com/go-chi/chi/v5"
-	"github.com/jwadow/kiro-gateway/gateway/internal/auth"
-	"github.com/jwadow/kiro-gateway/gateway/internal/cache"
-	"github.com/jwadow/kiro-gateway/gateway/internal/client"
-	"github.com/jwadow/kiro-gateway/gateway/internal/config"
-	"github.com/jwadow/kiro-gateway/gateway/internal/debug"
-	"github.com/jwadow/kiro-gateway/gateway/internal/middleware"
-	"github.com/jwadow/kiro-gateway/gateway/internal/resolver"
-	"github.com/jwadow/kiro-gateway/gateway/internal/truncation"
 )
 
 // Server holds all dependencies and the chi router for the gateway.

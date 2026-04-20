@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/middleware"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/middleware"
 )
 
 // dummyHandler is a simple handler that returns 200 OK with a body.

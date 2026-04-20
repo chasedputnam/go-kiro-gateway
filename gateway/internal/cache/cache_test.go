@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/models"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
 )
 
 // sampleModels returns a slice of ModelInfo used across tests.

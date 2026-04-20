@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/config"
-	"github.com/jwadow/kiro-gateway/gateway/internal/thinking"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/thinking"
 )
 
 // ---------------------------------------------------------------------------

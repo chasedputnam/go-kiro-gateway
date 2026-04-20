@@ -4,8 +4,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/cache"
-	"github.com/jwadow/kiro-gateway/gateway/internal/models"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/cache"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
 )
 
 // --- helpers ----------------------------------------------------------------

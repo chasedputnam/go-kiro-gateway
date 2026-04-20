@@ -19,7 +19,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/cache"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/cache"
 )
 
 // Compiled regexp patterns for model name normalization. These are

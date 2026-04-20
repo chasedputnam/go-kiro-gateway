@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/config"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
 
 	// Pure-Go SQLite driver.
 	_ "modernc.org/sqlite"

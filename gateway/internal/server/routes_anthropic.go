@@ -17,12 +17,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
-	"github.com/jwadow/kiro-gateway/gateway/internal/auth"
-	"github.com/jwadow/kiro-gateway/gateway/internal/converter"
-	gwerrors "github.com/jwadow/kiro-gateway/gateway/internal/errors"
-	"github.com/jwadow/kiro-gateway/gateway/internal/models"
-	"github.com/jwadow/kiro-gateway/gateway/internal/streaming"
-	"github.com/jwadow/kiro-gateway/gateway/internal/truncation"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/auth"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/converter"
+	gwerrors "github.com/chasedputnam/go-kiro-gateway/gateway/internal/errors"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/streaming"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/truncation"
 )
 
 // ---------------------------------------------------------------------------
