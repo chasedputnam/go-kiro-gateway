@@ -104,6 +104,7 @@ Works with:
 
 ```env
 KIRO_CREDS_FILE="~/.aws/sso/cache/kiro-auth-token.json"
+PROFILE_ARN="arn:aws:codewhisperer:us-east-1:..."
 
 # Password to protect YOUR proxy server (make up any secure string)
 # You'll use this as api_key when connecting to your gateway
@@ -135,12 +136,12 @@ Create a `.env` file in the project root:
 ```env
 # Required
 REFRESH_TOKEN="your_kiro_refresh_token"
+PROFILE_ARN="arn:aws:codewhisperer:us-east-1:..."
 
 # Password to protect YOUR proxy server (make up any secure string)
 PROXY_API_KEY="my-super-secret-password-123"
 
 # Optional
-PROFILE_ARN="arn:aws:codewhisperer:us-east-1:..."
 KIRO_REGION="us-east-1"
 ```
 
@@ -152,12 +153,10 @@ Works with both free Builder ID accounts and corporate accounts.
 
 ```env
 KIRO_CREDS_FILE="~/.aws/sso/cache/your-sso-cache-file.json"
+PROFILE_ARN="arn:aws:codewhisperer:us-east-1:..."
 
 # Password to protect YOUR proxy server
 PROXY_API_KEY="my-super-secret-password-123"
-
-# Note: PROFILE_ARN is NOT needed for AWS SSO (Builder ID and corporate accounts)
-# The gateway will work without it
 ```
 
 <details>
@@ -176,12 +175,10 @@ AWS SSO credentials files (from `~/.aws/sso/cache/`) contain:
 }
 ```
 
-**Note:** AWS SSO (Builder ID and corporate accounts) users do NOT need `profileArn`. The gateway will work without it (if specified, it will be ignored).
-
 </details>
 
 <details>
-<summary>🔍 How it works</summary>
+<summary>How it works</summary>
 
 The gateway automatically detects the authentication type based on the credentials file:
 
@@ -191,7 +188,7 @@ The gateway automatically detects the authentication type based on the credentia
 - **AWS SSO (OIDC)**: Used when `clientId` and `clientSecret` ARE present
   - Endpoint: `https://oidc.{region}.amazonaws.com/token`
 
-No additional configuration is needed — just point to your credentials file!
+No additional configuration is needed — just point to your credentials file.
 
 </details>
 
@@ -201,12 +198,10 @@ If you use `kiro-cli` and prefer to use its SQLite database directly:
 
 ```env
 KIRO_CLI_DB_FILE="~/.local/share/kiro-cli/data.sqlite3"
+PROFILE_ARN="arn:aws:codewhisperer:us-east-1:..."
 
 # Password to protect YOUR proxy server
 PROXY_API_KEY="my-super-secret-password-123"
-
-# Note: PROFILE_ARN is NOT needed for AWS SSO (Builder ID and corporate accounts)
-# The gateway will work without it
 ```
 
 <details>
@@ -245,7 +240,7 @@ If you need to manually extract the refresh token (e.g., for debugging), you can
 
 ---
 
-## Docker Deployment
+## Docker Deployment (Pending Container Repository Image Release)
 
 ### Quick Start
 
@@ -275,6 +270,7 @@ docker run -d \
   -p 8000:8000 \
   -e PROXY_API_KEY="my-super-secret-password-123" \
   -e REFRESH_TOKEN="your_refresh_token" \
+  -e PROFILE_ARN="arn:aws:codewhisperer:us-east-1:..." \
   --name go-kiro-gateway \
   ghcr.io/chasedputnam/go-kiro-gateway:latest
 ```
@@ -291,6 +287,7 @@ docker run -d \
   -v ~/.aws/sso/cache:/home/kiro/.aws/sso/cache:ro \
   -e KIRO_CREDS_FILE=/home/kiro/.aws/sso/cache/kiro-auth-token.json \
   -e PROXY_API_KEY="my-super-secret-password-123" \
+  -e PROFILE_ARN="arn:aws:codewhisperer:us-east-1:..." \
   --name go-kiro-gateway \
   ghcr.io/chasedputnam/go-kiro-gateway:latest
 ```
@@ -302,6 +299,7 @@ docker run -d `
   -v ${HOME}/.aws/sso/cache:/home/kiro/.aws/sso/cache:ro `
   -e KIRO_CREDS_FILE=/home/kiro/.aws/sso/cache/kiro-auth-token.json `
   -e PROXY_API_KEY="my-super-secret-password-123" `
+  -e PROFILE_ARN="arn:aws:codewhisperer:us-east-1:..." `
   --name go-kiro-gateway `
   ghcr.io/chasedputnam/go-kiro-gateway:latest
 ```
@@ -309,7 +307,7 @@ docker run -d `
 </details>
 
 <details>
-<summary>🔹 Using .env File</summary>
+<summary>Using .env File</summary>
 
 ```bash
 docker run -d -p 8000:8000 --env-file .env --name go-kiro-gateway ghcr.io/chasedputnam/go-kiro-gateway:latest
@@ -346,7 +344,7 @@ docker-compose pull && docker-compose up -d  # Update
 ```
 
 <details>
-<summary>🔧 Building from Source</summary>
+<summary>Building from Source</summary>
 
 ```bash
 cd gateway
