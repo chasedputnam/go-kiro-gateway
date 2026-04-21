@@ -17,7 +17,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
-	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/auth"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/converter"
 	gwerrors "github.com/chasedputnam/go-kiro-gateway/gateway/internal/errors"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
@@ -90,9 +89,9 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// Determine profile ARN.
 	profileARN := ""
-	if s.auth.AuthType() == auth.AuthTypeKiroDesktop {
-		profileARN = s.auth.ProfileARN()
-	}
+	//if s.auth.AuthType() == auth.AuthTypeKiroDesktop {
+	profileARN = s.auth.ProfileARN()
+	//}
 
 	// Convert to Kiro payload.
 	payloadResult, err := converter.BuildAnthropicKiroPayload(req, conversationID, profileARN, modelID, s.config)
@@ -101,7 +100,13 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write(gwerrors.AnthropicErrorResponse(err.Error(), "invalid_request_error"))
+		s.debugLogger.FlushOnError(http.StatusBadRequest, err.Error())
 		return
+	}
+
+	// Log the Kiro request body for debug.
+	if kiroBody, err := json.Marshal(payloadResult.Payload); err == nil {
+		s.debugLogger.LogKiroRequestBody(kiroBody)
 	}
 
 	// Build Kiro API URL.
@@ -141,6 +146,7 @@ func (s *Server) handleAnthropicStreaming(
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write(gwerrors.AnthropicErrorResponse(err.Error(), "api_error"))
+		s.debugLogger.FlushOnError(http.StatusBadGateway, err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -157,6 +163,8 @@ func (s *Server) handleAnthropicStreaming(
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		w.Write(gwerrors.AnthropicErrorResponse(errMsg, "api_error"))
+		s.debugLogger.LogRawChunk(errBody)
+		s.debugLogger.FlushOnError(resp.StatusCode, errMsg)
 		return
 	}
 
@@ -178,6 +186,8 @@ func (s *Server) handleAnthropicStreaming(
 		Str("path", "/v1/messages").
 		Dur("duration", duration).
 		Msg("HTTP 200 - POST /v1/messages (streaming) - completed")
+
+	s.debugLogger.DiscardBuffers()
 }
 
 // handleAnthropicNonStreaming handles non-streaming messages requests.
@@ -201,6 +211,7 @@ func (s *Server) handleAnthropicNonStreaming(
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write(gwerrors.AnthropicErrorResponse(err.Error(), "api_error"))
+		s.debugLogger.FlushOnError(http.StatusBadGateway, err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -217,6 +228,8 @@ func (s *Server) handleAnthropicNonStreaming(
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		w.Write(gwerrors.AnthropicErrorResponse(errMsg, "api_error"))
+		s.debugLogger.LogRawChunk(errBody)
+		s.debugLogger.FlushOnError(resp.StatusCode, errMsg)
 		return
 	}
 
@@ -237,6 +250,12 @@ func (s *Server) handleAnthropicNonStreaming(
 		Str("path", "/v1/messages").
 		Dur("duration", duration).
 		Msg("HTTP 200 - POST /v1/messages (non-streaming) - completed")
+
+	// Log the response for debug and mark request as successful.
+	if respBody, err := json.Marshal(anthropicResp); err == nil {
+		s.debugLogger.LogModifiedChunk(respBody)
+	}
+	s.debugLogger.DiscardBuffers()
 
 	writeJSON(w, http.StatusOK, anthropicResp)
 }

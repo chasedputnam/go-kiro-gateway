@@ -1,6 +1,7 @@
 # Environment
 .env
 .env.local
+.DS_Store
 
 # IDE
 .vscode/
@@ -17,3 +18,5 @@ _notes/
 requests/
 
 # Testing
+build/
+go-kiro-gateway

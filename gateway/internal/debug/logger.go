@@ -89,9 +89,20 @@ type debugLogger struct {
 
 // NewDebugLogger creates a DebugLogger for the given mode and output directory.
 // Returns a no-op logger when mode is "off" or unrecognised.
+//
+// When mode is "errors" or "all", the output directory is created immediately
+// so that operators can confirm the path is writable at startup rather than
+// discovering permission errors on the first request.
 func NewDebugLogger(mode, debugDir string) DebugLogger {
 	switch mode {
 	case "errors", "all":
+		// Eagerly create the output directory so startup logs confirm the
+		// path is valid and writable.
+		if err := os.MkdirAll(debugDir, 0o755); err != nil {
+			log.Error().Err(err).Str("dir", debugDir).Msg("[DebugLogger] failed to create debug directory at startup")
+		} else {
+			log.Info().Str("dir", debugDir).Str("mode", mode).Msg("[DebugLogger] debug directory ready")
+		}
 		return &debugLogger{
 			debugDir: debugDir,
 			mode:     mode,

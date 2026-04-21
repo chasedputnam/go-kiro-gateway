@@ -416,6 +416,32 @@ VPN_PROXY_URL=192.168.1.100:8080
 
 ---
 
+## Configuring Tools
+
+### Claude Code (ENV VAR)
+
+Exporting the `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` environment variables will setup Claude Code to use alternate providers, such as go-kiro-gateway.
+
+Examples to insert into your .bashrc or .bash_profile:
+
+```
+export ANTHROPIC_BASE_URL=http://localhost:8000
+export ANTHROPIC_API_KEY=proxy-api-key-from-env-file-here
+```
+
+## Claude Code (settings.json)
+
+Example to insert into your Claude `settings.json` file:
+```
+{
+  ...
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:8000",
+    "ANTHROPIC_API_KEY": "proxy-api-key-from-env-file-here",
+  }
+}
+```
+
 ## Usage Examples
 
 ### OpenAI API

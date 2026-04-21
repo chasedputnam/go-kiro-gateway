@@ -144,7 +144,7 @@ func Load() (*Config, error) {
 	cfg.TokenRefreshThreshold = time.Duration(envInt("TOKEN_REFRESH_THRESHOLD", 600)) * time.Second
 
 	cfg.Version = "2.3"
-	cfg.Title = "Kiro Gateway"
+	cfg.Title = "Go Kiro Gateway"
 	cfg.Description = "Proxy gateway for Kiro API (Amazon Q Developer / AWS CodeWhisperer). OpenAI and Anthropic compatible. Made by @jwadow"
 
 	// 3. CLI flags override environment variables.
@@ -360,9 +360,11 @@ func normalizePath(p string) string {
 func defaultFallbackModels() []FallbackModel {
 	return []FallbackModel{
 		{ModelID: "auto"},
+		{ModelID: "claude-opus-4.6"},
+		{ModelID: "claude-opus-4.5"},
+		{ModelID: "claude-sonnet-4.6"},
+		{ModelID: "claude-sonnet-4.5"},
 		{ModelID: "claude-sonnet-4"},
 		{ModelID: "claude-haiku-4.5"},
-		{ModelID: "claude-sonnet-4.5"},
-		{ModelID: "claude-opus-4.5"},
 	}
 }

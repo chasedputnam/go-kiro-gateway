@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -88,6 +89,9 @@ func run() error {
 	// 7. Initialize debug logger.
 	debugLogger := debug.NewDebugLogger(cfg.DebugMode, cfg.DebugDir)
 
+	// 4b. Log the startup model fetch for debug visibility.
+	logStartupModels(debugLogger, modelCache)
+
 	// 8. Initialize truncation state.
 	truncState := truncation.NewState()
 
@@ -103,14 +107,19 @@ func run() error {
 
 // loadModelsAtStartup attempts to load models from the Kiro
 // ListAvailableModels API. On failure it falls back to the hardcoded
-// fallback model list from config.
+// fallback model list from config, logging enough detail for operators
+// to diagnose the failure.
 func loadModelsAtStartup(cfg *config.Config, authMgr auth.AuthManager, modelCache cache.ModelCache) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	log.Info().Str("host", authMgr.QHost()).Msg("Fetching models from Kiro API")
+
 	modelList, err := fetchModelsFromKiro(ctx, cfg, authMgr)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to load models from Kiro API, using fallback list")
+
+		fallbackIDs := make([]string, 0, len(cfg.FallbackModels))
 		fallback := make([]models.ModelInfo, 0, len(cfg.FallbackModels))
 		for _, fm := range cfg.FallbackModels {
 			fallback = append(fallback, models.ModelInfo{
@@ -118,41 +127,79 @@ func loadModelsAtStartup(cfg *config.Config, authMgr auth.AuthManager, modelCach
 				MaxInputTokens: cfg.DefaultMaxInputTokens,
 				DisplayName:    fm.ModelID,
 			})
+			fallbackIDs = append(fallbackIDs, fm.ModelID)
 		}
 		modelCache.Update(fallback)
-		log.Info().Int("count", len(fallback)).Msg("Loaded fallback models")
+
+		log.Info().
+			Int("count", len(fallback)).
+			Strs("models", fallbackIDs).
+			Msg("Loaded fallback models")
 		return
 	}
 
+	loadedIDs := make([]string, 0, len(modelList))
+	for _, m := range modelList {
+		loadedIDs = append(loadedIDs, m.ModelID)
+	}
 	modelCache.Update(modelList)
-	log.Info().Int("count", len(modelList)).Msg("Loaded models from Kiro API")
+
+	log.Info().
+		Int("count", len(modelList)).
+		Strs("models", loadedIDs).
+		Msg("Loaded models from Kiro API")
 }
 
 // fetchModelsFromKiro calls the Kiro ListAvailableModels API and returns
-// the parsed model list. This is a best-effort call at startup.
+// the parsed model list. This is a best-effort call at startup. Each step
+// is logged so operators can pinpoint failures from the console output.
 func fetchModelsFromKiro(ctx context.Context, cfg *config.Config, authMgr auth.AuthManager) ([]models.ModelInfo, error) {
 	token, err := authMgr.GetAccessToken(ctx)
 	if err != nil {
+		log.Error().Err(err).Msg("Failed to obtain access token for model fetch")
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
+	log.Debug().Msg("Access token obtained for model fetch")
 
-	url := fmt.Sprintf("%s/ListAvailableModels", authMgr.QHost())
+	apiURL := fmt.Sprintf("%s/ListAvailableModels", authMgr.QHost())
+	log.Debug().Str("url", apiURL).Msg("Requesting model list from Kiro API")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
+		log.Error().Err(err).Str("url", apiURL).Msg("Failed to create model list request")
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
+	client.SetKiroHeaders(req, token, authMgr.Fingerprint(), authMgr.ProfileARN())
+
+	// The Kiro API requires profileArn and origin on every request.
+	// For GET requests these are sent as query parameters.
+	profileARN := authMgr.ProfileARN()
+	q := req.URL.Query()
+	q.Set("profileArn", profileARN)
+	q.Set("origin", "AI_EDITOR")
+	req.URL.RawQuery = q.Encode()
+
+	log.Debug().
+		Str("url", req.URL.String()).
+		Str("profileArn", profileARN).
+		Msg("Sending ListAvailableModels request")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("HTTP request: %w", err)
+		log.Error().Err(err).Str("url", apiURL).Msg("HTTP request to Kiro API failed")
+		return nil, fmt.Errorf("HTTP request to %s: %w", apiURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+		// Read the response body for diagnostic detail.
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		log.Error().
+			Int("status", resp.StatusCode).
+			Str("url", apiURL).
+			Str("body", string(errBody)).
+			Msg("Kiro API returned non-200 status for model list")
+		return nil, fmt.Errorf("ListAvailableModels returned status %d: %s", resp.StatusCode, string(errBody))
 	}
 
 	// Parse the response. The Kiro API returns a JSON object with a
@@ -167,6 +214,7 @@ func fetchModelsFromKiro(ctx context.Context, cfg *config.Config, authMgr auth.A
 
 	var body listModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		log.Error().Err(err).Str("url", apiURL).Msg("Failed to decode model list response")
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
@@ -186,6 +234,28 @@ func fetchModelsFromKiro(ctx context.Context, cfg *config.Config, authMgr auth.A
 	return result, nil
 }
 
+// logStartupModels writes the loaded model list to the debug log directory
+// so operators can verify which models were discovered at startup. This runs
+// after the debug logger is initialised and the model cache is populated.
+func logStartupModels(dl debug.DebugLogger, modelCache cache.ModelCache) {
+	modelIDs := modelCache.GetAllModelIDs()
+	if len(modelIDs) == 0 {
+		return
+	}
+
+	info := map[string]any{
+		"event":     "startup_models_loaded",
+		"model_ids": modelIDs,
+		"count":     len(modelIDs),
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return
+	}
+	dl.LogAppMessage(fmt.Sprintf("[startup] Loaded %d models: %s", len(modelIDs), string(data)))
+}
+
 // printBanner prints the startup banner with server URL and useful paths.
 func printBanner(cfg *config.Config) {
 	addr := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
@@ -195,7 +265,7 @@ func printBanner(cfg *config.Config) {
 
 	fmt.Println()
 	fmt.Println("╔══════════════════════════════════════════════════════╗")
-	fmt.Println("║                  👻 Kiro Gateway                    ║")
+	fmt.Println("║                  Go Kiro Gateway                     ║")
 	fmt.Printf("║  Version: %-42s ║\n", cfg.Version)
 	fmt.Println("╠══════════════════════════════════════════════════════╣")
 	fmt.Printf("║  Server:  %-42s ║\n", addr)
@@ -213,6 +283,8 @@ func startWithGracefulShutdown(srv *server.Server, cfg *config.Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+
 	// Start the server in a goroutine.
 	errCh := make(chan error, 1)
 	go func() {
@@ -221,6 +293,30 @@ func startWithGracefulShutdown(srv *server.Server, cfg *config.Config) error {
 		}
 		close(errCh)
 	}()
+
+	// Give the server a moment to bind, then verify it's reachable.
+	// This catches "address already in use" and similar errors early.
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("server failed to start on %s: %w", addr, err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		// Server goroutine hasn't errored — verify with a health check.
+		healthURL := fmt.Sprintf("http://127.0.0.1:%d/health", cfg.Port)
+		healthResp, err := http.Get(healthURL)
+		if err != nil {
+			log.Warn().Err(err).Str("url", healthURL).Msg("Server started but health check failed — verify the listening address")
+		} else {
+			healthResp.Body.Close()
+			log.Info().
+				Str("addr", addr).
+				Int("port", cfg.Port).
+				Str("anthropic_base_url", fmt.Sprintf("http://localhost:%d", cfg.Port)).
+				Str("openai_base_url", fmt.Sprintf("http://localhost:%d/v1", cfg.Port)).
+				Msg("Server listening and healthy")
+		}
+	}
 
 	// Wait for shutdown signal or server error.
 	select {

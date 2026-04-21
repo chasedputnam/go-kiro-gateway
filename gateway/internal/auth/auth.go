@@ -196,8 +196,8 @@ func NewAuthManager(cfg *config.Config) (AuthManager, error) {
 		m.profileARN = cfg.ProfileARN
 	}
 
-	log.Printf("Auth manager initialized: type=%s, region=%s, api_host=%s, q_host=%s",
-		m.authType, cfg.Region, m.apiHost, m.qHost)
+	log.Printf("Auth manager initialized: type=%s, region=%s, api_host=%s, q_host=%s, profileARN=%s",
+		m.authType, cfg.Region, m.apiHost, m.qHost, m.profileARN)
 
 	return m, nil
 }
@@ -365,8 +365,8 @@ func (m *kiroAuthManager) loadFromCredsFile(path string) error {
 		m.apiHost = fmt.Sprintf(kiroAPIHostTemplate, creds.Region)
 		m.qHost = fmt.Sprintf(kiroQHostTemplate, creds.Region)
 		m.ssoRegion = creds.Region
-		log.Printf("Region updated from credentials file: region=%s, api_host=%s, q_host=%s",
-			creds.Region, m.apiHost, m.qHost)
+		log.Printf("Region updated from credentials file: region=%s, api_host=%s, q_host=%s, profileARN=%s",
+			creds.Region, m.apiHost, m.qHost, m.profileARN)
 	}
 
 	// Enterprise Kiro IDE: load device registration from
@@ -387,6 +387,13 @@ func (m *kiroAuthManager) loadFromCredsFile(path string) error {
 	if creds.ExpiresAt != "" {
 		m.expiresAt = parseTime(creds.ExpiresAt)
 	}
+
+	log.Printf("Auth state after credential load: authType=%s region=%s apiHost=%s qHost=%s profileARN=%s "+
+		"hasRefreshToken=%t hasAccessToken=%t hasClientID=%t hasClientSecret=%t "+
+		"expiresAt=%s fingerprint=%s credsFile=%s sqliteDB=%s",
+		m.authType, m.ssoRegion, m.apiHost, m.qHost, m.profileARN,
+		m.refreshToken != "", m.accessToken != "", m.clientID != "", m.clientSecret != "",
+		m.expiresAt.Format(time.RFC3339), m.fingerprint, m.credsFile, m.sqliteDB)
 
 	return nil
 }

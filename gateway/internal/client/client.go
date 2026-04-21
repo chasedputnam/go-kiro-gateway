@@ -118,7 +118,7 @@ func (c *kiroHTTPClient) RequestWithRetry(ctx context.Context, method, reqURL st
 		}
 
 		// Set headers.
-		setKiroHeaders(req, token, c.auth.Fingerprint())
+		SetKiroHeaders(req, token, c.auth.Fingerprint(), c.auth.ProfileARN())
 		if stream {
 			req.Header.Set("Connection", "close")
 		}
@@ -282,20 +282,27 @@ func isLocalhost(host string) bool {
 // Headers
 // ---------------------------------------------------------------------------
 
-// setKiroHeaders sets the standard headers required by the Kiro API on the
+// SetKiroHeaders sets the standard headers required by the Kiro API on the
 // given request. This includes Authorization, Content-Type, User-Agent with
 // machine fingerprint, and AWS-specific headers.
-func setKiroHeaders(req *http.Request, token, fingerprint string) {
+//
+// Exported so that callers outside the client package (e.g. startup model
+// fetching) can produce correctly-formed requests without duplicating the
+// header logic.
+func SetKiroHeaders(req *http.Request, token, fingerprint, profileARN string) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent",
-		fmt.Sprintf("aws-sdk-js/1.0.27 ua/2.1 os/win32#10.0.19044 lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroIDE-0.7.45-%s", fingerprint))
+		fmt.Sprintf("aws-sdk-js/1.0.27 ua/2.1 os/win32#10.0.19044 lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroIDE-0.11.132-%s", fingerprint))
 	req.Header.Set("x-amz-user-agent",
-		fmt.Sprintf("aws-sdk-js/1.0.27 KiroIDE-0.7.45-%s", fingerprint))
+		fmt.Sprintf("aws-sdk-js/1.0.27 KiroIDE-0.11.132-%s", fingerprint))
 	req.Header.Set("x-amzn-codewhisperer-optout", "true")
 	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
 	req.Header.Set("amz-sdk-invocation-id", generateUUID())
 	req.Header.Set("amz-sdk-request", "attempt=1; max=3")
+	if profileARN != "" {
+		req.Header.Set("x-amzn-codewhisperer-profile-arn", profileARN)
+	}
 }
 
 // ---------------------------------------------------------------------------

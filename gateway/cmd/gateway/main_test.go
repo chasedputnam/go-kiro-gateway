@@ -65,7 +65,7 @@ func testConfig() *config.Config {
 		ProxyAPIKey:           "test-key",
 		Region:                "us-east-1",
 		Version:               "test",
-		Title:                 "Kiro Gateway",
+		Title:                 "Go Kiro Gateway",
 		Description:           "Test",
 		DebugMode:             "off",
 		DebugDir:              "debug_logs",
