@@ -198,7 +198,16 @@ func (s *Server) handleOpenAIStreaming(
 		MaxInputTokens:       maxInputTokens,
 	}
 
-	streaming.StreamToOpenAI(w, events, openAIOpts)
+	truncatedCalls := streaming.StreamToOpenAI(w, events, openAIOpts)
+
+	if s.config.TruncationRecovery {
+		for _, tc := range truncatedCalls {
+			s.truncState.SaveToolTruncation(tc.ID, tc.Name, map[string]any{
+				"size_bytes": len(tc.Arguments),
+				"reason":     "upstream_truncation",
+			})
+		}
+	}
 
 	duration := time.Since(start)
 	log.Info().
@@ -263,6 +272,15 @@ func (s *Server) handleOpenAINonStreaming(
 		ThinkingHandlingMode: streamOpts.ThinkingHandlingMode,
 		MaxInputTokens:       maxInputTokens,
 	})
+
+	if s.config.TruncationRecovery {
+		for _, tc := range collected.TruncatedToolCalls {
+			s.truncState.SaveToolTruncation(tc.ID, tc.Name, map[string]any{
+				"size_bytes": len(tc.Arguments),
+				"reason":     "upstream_truncation",
+			})
+		}
+	}
 
 	duration := time.Since(start)
 	log.Info().

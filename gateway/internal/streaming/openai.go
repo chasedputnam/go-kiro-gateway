@@ -65,11 +65,14 @@ func GenerateToolCallID() string {
 // StreamToOpenAI reads events from the channel and writes OpenAI SSE chunks
 // to w. The caller must have already set appropriate headers on w before
 // calling this function. The function returns when the channel is closed.
-func StreamToOpenAI(w http.ResponseWriter, events <-chan KiroEvent, opts OpenAIStreamOptions) {
+// The returned slice contains any tool calls that were truncated by the
+// upstream API (IsTruncated == true), so callers can save them for recovery
+// on the next request.
+func StreamToOpenAI(w http.ResponseWriter, events <-chan KiroEvent, opts OpenAIStreamOptions) []ToolCallInfo {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
+		return nil
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -145,7 +148,7 @@ func StreamToOpenAI(w http.ResponseWriter, events <-chan KiroEvent, opts OpenAIS
 
 		case EventTypeError:
 			log.Printf("Error during OpenAI streaming: %v", event.Error)
-			return
+			return nil
 
 		case EventTypeDone:
 			// Will be handled after the loop.
@@ -211,6 +214,15 @@ func StreamToOpenAI(w http.ResponseWriter, events <-chan KiroEvent, opts OpenAIS
 	// Send [DONE].
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+
+	// Collect truncated tool calls for the caller to save to truncation state.
+	var truncated []ToolCallInfo
+	for _, tc := range allToolCalls {
+		if tc.IsTruncated {
+			truncated = append(truncated, tc)
+		}
+	}
+	return truncated
 }
 
 // ---------------------------------------------------------------------------

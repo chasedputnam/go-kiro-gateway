@@ -224,6 +224,7 @@ func parseKiroStreamInternal(ctx context.Context, r io.Reader, opts StreamOption
 
 	// Read loop — read chunks from the reader.
 	buf := make([]byte, 32*1024) // 32 KB read buffer
+	var leftover []byte           // bytes from a previous chunk that didn't form a complete JSON event
 	firstTokenReceived := false
 
 	// Set up first-token timeout context if configured.
@@ -283,10 +284,23 @@ func parseKiroStreamInternal(ctx context.Context, r io.Reader, opts StreamOption
 		}
 
 		if rr.n > 0 {
-			chunk := buf[:rr.n]
+			// Prepend any leftover bytes from the previous chunk so that JSON
+			// events that straddle a read boundary are parsed correctly.
+			var chunk []byte
+			if len(leftover) > 0 {
+				chunk = append(leftover, buf[:rr.n]...)
+				leftover = nil
+			} else {
+				chunk = buf[:rr.n]
+			}
 
 			// Parse through event stream parser.
-			events := parser.ParseEventStream(chunk)
+			events, remaining := parser.ParseEventStream(chunk)
+			// Carry forward any bytes that didn't form a complete JSON event.
+			if len(remaining) > 0 {
+				leftover = make([]byte, len(remaining))
+				copy(leftover, remaining)
+			}
 
 			for _, evt := range events {
 				switch evt.Type {

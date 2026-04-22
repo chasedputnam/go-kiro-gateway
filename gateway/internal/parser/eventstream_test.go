@@ -9,7 +9,7 @@ import (
 
 func TestParseEventStream_SingleContentEvent(t *testing.T) {
 	data := []byte(`{"content":"Hello, world!"}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -24,7 +24,7 @@ func TestParseEventStream_SingleContentEvent(t *testing.T) {
 
 func TestParseEventStream_MultipleContentEvents(t *testing.T) {
 	data := []byte(`{"content":"Hello"}{"content":" world"}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(events))
@@ -39,7 +39,7 @@ func TestParseEventStream_MultipleContentEvents(t *testing.T) {
 
 func TestParseEventStream_DeduplicatesConsecutiveContent(t *testing.T) {
 	data := []byte(`{"content":"Hello"}{"content":"Hello"}{"content":"Hello"}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event after dedup, got %d", len(events))
@@ -52,7 +52,7 @@ func TestParseEventStream_DeduplicatesConsecutiveContent(t *testing.T) {
 func TestParseEventStream_DeduplicatesOnlyConsecutive(t *testing.T) {
 	// Same content separated by different content should not be deduped.
 	data := []byte(`{"content":"A"}{"content":"B"}{"content":"A"}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 3 {
 		t.Fatalf("expected 3 events, got %d", len(events))
@@ -65,7 +65,7 @@ func TestParseEventStream_DeduplicatesOnlyConsecutive(t *testing.T) {
 
 func TestParseEventStream_SkipsFollowupPrompt(t *testing.T) {
 	data := []byte(`{"content":"Hello","followupPrompt":"What next?"}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 0 {
 		t.Fatalf("expected 0 events for followupPrompt, got %d", len(events))
@@ -74,7 +74,7 @@ func TestParseEventStream_SkipsFollowupPrompt(t *testing.T) {
 
 func TestParseEventStream_EmptyContent(t *testing.T) {
 	data := []byte(`{"content":""}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -86,7 +86,7 @@ func TestParseEventStream_EmptyContent(t *testing.T) {
 
 func TestParseEventStream_ContentWithSpecialChars(t *testing.T) {
 	data := []byte(`{"content":"line1\nline2\ttab \"quoted\""}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -101,7 +101,7 @@ func TestParseEventStream_ContentWithSpecialChars(t *testing.T) {
 
 func TestParseEventStream_ToolStartEvent(t *testing.T) {
 	data := []byte(`{"name":"get_weather","toolUseId":"tool_123"}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -119,7 +119,7 @@ func TestParseEventStream_ToolStartEvent(t *testing.T) {
 
 func TestParseEventStream_ToolInputEvent(t *testing.T) {
 	data := []byte(`{"input":"{\"city\":\"London\"}"}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -134,7 +134,7 @@ func TestParseEventStream_ToolInputEvent(t *testing.T) {
 
 func TestParseEventStream_ToolInputAsObject(t *testing.T) {
 	data := []byte(`{"input":{"city":"London"}}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -154,7 +154,7 @@ func TestParseEventStream_ToolInputAsObject(t *testing.T) {
 
 func TestParseEventStream_ToolStopEvent(t *testing.T) {
 	data := []byte(`{"stop":true}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -171,7 +171,7 @@ func TestParseEventStream_FullToolCallSequence(t *testing.T) {
 			`{"input":"\"src/main.go\"}"}` +
 			`{"stop":true}`,
 	)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 4 {
 		t.Fatalf("expected 4 events, got %d", len(events))
@@ -206,7 +206,7 @@ func TestParseEventStream_FullToolCallSequence(t *testing.T) {
 
 func TestParseEventStream_UsageEvent(t *testing.T) {
 	data := []byte(`{"usage":{"credits":0.5}}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -224,7 +224,7 @@ func TestParseEventStream_UsageEvent(t *testing.T) {
 
 func TestParseEventStream_UsageEventZeroCredits(t *testing.T) {
 	data := []byte(`{"usage":{"credits":0}}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -241,7 +241,7 @@ func TestParseEventStream_UsageEventZeroCredits(t *testing.T) {
 
 func TestParseEventStream_ContextUsageEvent(t *testing.T) {
 	data := []byte(`{"contextUsagePercentage":45.2}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -256,7 +256,7 @@ func TestParseEventStream_ContextUsageEvent(t *testing.T) {
 
 func TestParseEventStream_ContextUsageZero(t *testing.T) {
 	data := []byte(`{"contextUsagePercentage":0}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -278,7 +278,7 @@ func TestParseEventStream_MixedEventTypes(t *testing.T) {
 			`{"usage":{"credits":1.0}}` +
 			`{"contextUsagePercentage":30.5}`,
 	)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 7 {
 		t.Fatalf("expected 7 events, got %d", len(events))
@@ -298,7 +298,7 @@ func TestParseEventStream_MixedEventTypes(t *testing.T) {
 func TestParseEventStream_BinaryGarbageBetweenEvents(t *testing.T) {
 	// Simulate binary framing bytes between JSON events.
 	data := []byte("\x00\x01\x02{\"content\":\"Hello\"}\x00\x03{\"content\":\" world\"}")
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(events))
@@ -314,14 +314,14 @@ func TestParseEventStream_BinaryGarbageBetweenEvents(t *testing.T) {
 // --- ParseEventStream: edge cases -------------------------------------------
 
 func TestParseEventStream_EmptyInput(t *testing.T) {
-	events := ParseEventStream([]byte{})
+	events, _ := ParseEventStream([]byte{})
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for empty input, got %d", len(events))
 	}
 }
 
 func TestParseEventStream_NilInput(t *testing.T) {
-	events := ParseEventStream(nil)
+	events, _ := ParseEventStream(nil)
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for nil input, got %d", len(events))
 	}
@@ -330,7 +330,7 @@ func TestParseEventStream_NilInput(t *testing.T) {
 func TestParseEventStream_IncompleteJSON(t *testing.T) {
 	// Truncated JSON — should be skipped.
 	data := []byte(`{"content":"Hello`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for incomplete JSON, got %d", len(events))
@@ -340,7 +340,7 @@ func TestParseEventStream_IncompleteJSON(t *testing.T) {
 func TestParseEventStream_MalformedJSON(t *testing.T) {
 	// Valid braces but invalid JSON content.
 	data := []byte(`{"content":invalid}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	// The brace matcher will find a match, but json.Unmarshal will fail.
 	if len(events) != 0 {
@@ -350,7 +350,7 @@ func TestParseEventStream_MalformedJSON(t *testing.T) {
 
 func TestParseEventStream_NestedBracesInContent(t *testing.T) {
 	data := []byte(`{"content":"code: {\"key\": {\"nested\": true}}"}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -364,7 +364,7 @@ func TestParseEventStream_NestedBracesInContent(t *testing.T) {
 func TestParseEventStream_UnknownEventType(t *testing.T) {
 	// An event with an unknown prefix should be skipped.
 	data := []byte(`{"unknown":"value"}{"content":"Hello"}`)
-	events := ParseEventStream(data)
+	events, _ := ParseEventStream(data)
 
 	// Only the content event should be parsed.
 	if len(events) != 1 {
@@ -562,5 +562,37 @@ func TestFindMatchingBrace_OffsetStart(t *testing.T) {
 	pos := findMatchingBrace(text, 3)
 	if pos != 15 {
 		t.Errorf("expected 15, got %d", pos)
+	}
+}
+
+// --- ParseEventStream: chunk boundary buffering -----------------------------
+
+func TestParseEventStream_ReturnsRemainderOnIncompleteJSON(t *testing.T) {
+	// Simulate a read chunk that ends mid-JSON event.
+	chunk1 := []byte(`{"content":"Hello"}{"content":"wor`)
+	events, remaining := ParseEventStream(chunk1)
+
+	if len(events) != 1 {
+		t.Fatalf("expected 1 complete event, got %d", len(events))
+	}
+	if events[0].Content != "Hello" {
+		t.Errorf("expected 'Hello', got %q", events[0].Content)
+	}
+	if len(remaining) == 0 {
+		t.Fatal("expected non-empty remainder for incomplete JSON")
+	}
+
+	// Simulate the next read chunk completing the event.
+	chunk2 := append(remaining, []byte(`ld"}`)...)
+	events2, remaining2 := ParseEventStream(chunk2)
+
+	if len(events2) != 1 {
+		t.Fatalf("expected 1 event from completed chunk, got %d", len(events2))
+	}
+	if events2[0].Content != "world" {
+		t.Errorf("expected 'world', got %q", events2[0].Content)
+	}
+	if len(remaining2) != 0 {
+		t.Errorf("expected empty remainder, got %q", remaining2)
 	}
 }

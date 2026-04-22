@@ -78,12 +78,14 @@ func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType string
 // StreamToAnthropic reads events from the channel and writes Anthropic SSE
 // events to w. The caller must have already set appropriate headers on w
 // before calling this function. The function returns when the channel is
-// closed.
-func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts AnthropicStreamOptions) {
+// closed. The returned slice contains any tool calls that were truncated by
+// the upstream API (IsTruncated == true), so callers can save them for
+// recovery on the next request.
+func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts AnthropicStreamOptions) []ToolCallInfo {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
+		return nil
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -244,7 +246,7 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 
 		case EventTypeError:
 			log.Printf("Error during Anthropic streaming: %v", event.Error)
-			return
+			return nil
 
 		case EventTypeDone:
 			// Will be handled after the loop.
@@ -338,6 +340,15 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 	writeSSEEvent(w, flusher, "message_stop", map[string]any{
 		"type": "message_stop",
 	})
+
+	// Collect truncated tool calls for the caller to save to truncation state.
+	var truncated []ToolCallInfo
+	for _, tc := range allToolCalls {
+		if tc.IsTruncated {
+			truncated = append(truncated, tc)
+		}
+	}
+	return truncated
 }
 
 // generateThinkingSignature returns a placeholder signature for thinking

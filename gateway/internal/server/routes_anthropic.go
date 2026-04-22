@@ -177,7 +177,16 @@ func (s *Server) handleAnthropicStreaming(
 		MaxInputTokens:       maxInputTokens,
 	}
 
-	streaming.StreamToAnthropic(w, events, anthropicOpts)
+	truncatedCalls := streaming.StreamToAnthropic(w, events, anthropicOpts)
+
+	if s.config.TruncationRecovery {
+		for _, tc := range truncatedCalls {
+			s.truncState.SaveToolTruncation(tc.ID, tc.Name, map[string]any{
+				"size_bytes": len(tc.Arguments),
+				"reason":     "upstream_truncation",
+			})
+		}
+	}
 
 	duration := time.Since(start)
 	log.Info().
@@ -242,6 +251,15 @@ func (s *Server) handleAnthropicNonStreaming(
 		ThinkingHandlingMode: streamOpts.ThinkingHandlingMode,
 		MaxInputTokens:       maxInputTokens,
 	})
+
+	if s.config.TruncationRecovery {
+		for _, tc := range collected.TruncatedToolCalls {
+			s.truncState.SaveToolTruncation(tc.ID, tc.Name, map[string]any{
+				"size_bytes": len(tc.Arguments),
+				"reason":     "upstream_truncation",
+			})
+		}
+	}
 
 	duration := time.Since(start)
 	log.Info().

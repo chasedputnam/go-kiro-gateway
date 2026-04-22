@@ -904,9 +904,9 @@ func normalizeMessageRoles(messages []UnifiedMessage) []UnifiedMessage {
 	return out
 }
 
-// ensureAlternatingRoles inserts synthetic "(empty)" assistant messages
-// between consecutive user messages so that the Kiro API's alternation
-// requirement is satisfied.
+// ensureAlternatingRoles inserts synthetic filler messages between any two
+// consecutive messages with the same role so that the Kiro API's strict
+// user/assistant alternation requirement is satisfied.
 func ensureAlternatingRoles(messages []UnifiedMessage) []UnifiedMessage {
 	if len(messages) < 2 {
 		return messages
@@ -918,15 +918,20 @@ func ensureAlternatingRoles(messages []UnifiedMessage) []UnifiedMessage {
 
 	for _, msg := range messages[1:] {
 		prev := result[len(result)-1]
-		if msg.Role == "user" && prev.Role == "user" {
-			result = append(result, UnifiedMessage{Role: "assistant", Content: "(empty)"})
+		if msg.Role == prev.Role {
+			// Insert the opposite role as a filler.
+			filler := "user"
+			if msg.Role == "user" {
+				filler = "assistant"
+			}
+			result = append(result, UnifiedMessage{Role: filler, Content: "(empty)"})
 			count++
 		}
 		result = append(result, msg)
 	}
 
 	if count > 0 {
-		log.Printf("Inserted %d synthetic assistant message(s) to ensure alternation", count)
+		log.Printf("Inserted %d synthetic filler message(s) to ensure alternation", count)
 	}
 	return result
 }

@@ -33,6 +33,11 @@ type CollectedResponse struct {
 	// ToolCalls contains all deduplicated tool calls.
 	ToolCalls []ToolCallInfo
 
+	// TruncatedToolCalls contains tool calls that were truncated by the
+	// upstream API. Callers should save these to truncation state so the
+	// next request can inject recovery notices.
+	TruncatedToolCalls []ToolCallInfo
+
 	// ContextUsagePercentage is the context usage percentage from the
 	// Kiro API, or 0 if not reported.
 	ContextUsagePercentage float64
@@ -86,6 +91,13 @@ func CollectFullResponse(events <-chan KiroEvent) *CollectedResponse {
 	// Parse bracket-style tool calls from accumulated content.
 	bracketCalls := parser.ParseBracketToolCalls(resp.Content)
 	resp.ToolCalls = mergeAndDeduplicateToolCalls(toolCallsFromStream, bracketCalls)
+
+	// Collect truncated tool calls for the caller to save to truncation state.
+	for _, tc := range resp.ToolCalls {
+		if tc.IsTruncated {
+			resp.TruncatedToolCalls = append(resp.TruncatedToolCalls, tc)
+		}
+	}
 
 	return resp
 }

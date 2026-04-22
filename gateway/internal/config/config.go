@@ -143,7 +143,7 @@ func Load() (*Config, error) {
 	cfg.BaseRetryDelay = time.Duration(envFloat("BASE_RETRY_DELAY", 1.0)*1000) * time.Millisecond
 	cfg.TokenRefreshThreshold = time.Duration(envInt("TOKEN_REFRESH_THRESHOLD", 600)) * time.Second
 
-	cfg.Version = "0.0.3"
+	cfg.Version = "1.0"
 	cfg.Title = "Go Kiro Gateway"
 	cfg.Description = "Proxy gateway for Kiro API (Amazon Q Developer / AWS CodeWhisperer). OpenAI and Anthropic compatible."
 

@@ -76,10 +76,11 @@ var knownPatterns = []eventPattern{
 // KiroStreamEvent values.
 //
 // Consecutive identical content events are deduplicated (only the
-// first occurrence is kept). Incomplete JSON objects at the end of
-// the data are silently skipped — the caller should buffer and
-// re-submit remaining bytes in the next call.
-func ParseEventStream(data []byte) []KiroStreamEvent {
+// first occurrence is kept). If a JSON object is incomplete at the
+// end of the data (straddles a read boundary), the unparsed bytes
+// are returned as the second value so the caller can prepend them to
+// the next read buffer.
+func ParseEventStream(data []byte) ([]KiroStreamEvent, []byte) {
 	text := string(data)
 	var events []KiroStreamEvent
 	var lastContent string
@@ -105,8 +106,9 @@ func ParseEventStream(data []byte) []KiroStreamEvent {
 		// Extract the complete JSON object starting at earliestPos.
 		jsonEnd := findMatchingBrace(text, earliestPos)
 		if jsonEnd == -1 {
-			// Incomplete JSON — stop processing.
-			break
+			// Incomplete JSON — return the unparsed remainder to the caller
+			// so it can be prepended to the next read buffer.
+			return events, []byte(text[earliestPos:])
 		}
 
 		jsonStr := text[earliestPos : jsonEnd+1]
@@ -135,7 +137,7 @@ func ParseEventStream(data []byte) []KiroStreamEvent {
 		events = append(events, *evt)
 	}
 
-	return events
+	return events, nil
 }
 
 // IsToolCallTruncated checks whether a tool call argument string

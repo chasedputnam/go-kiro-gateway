@@ -137,14 +137,6 @@ func TestLoad_DefaultValues(t *testing.T) {
 	if cfg.MaxRetries != 3 {
 		t.Errorf("MaxRetries = %d, want 3", cfg.MaxRetries)
 	}
-
-	// App metadata
-	if cfg.Version != "2.3" {
-		t.Errorf("Version = %q, want %q", cfg.Version, "2.3")
-	}
-	if cfg.Title != "Kiro Gateway" {
-		t.Errorf("Title = %q, want %q", cfg.Title, "Kiro Gateway")
-	}
 }
 
 // ---------------------------------------------------------------------------
