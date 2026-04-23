@@ -100,9 +100,9 @@ is_file_valid() {
 discover_credentials() {
     CREDS_FILE=""
 
-    # 1. Exact match in ~/.aws/sso/cache/
+    # 1. Prefer kiro-auth-token.json — use it even if expired (refreshToken still works)
     local exact="$HOME/.aws/sso/cache/kiro-auth-token.json"
-    if is_file_valid "$exact"; then
+    if [ -r "$exact" ] && [ -s "$exact" ]; then
         CREDS_FILE="$exact"
         echo "  Found credential file: $CREDS_FILE"
         return
