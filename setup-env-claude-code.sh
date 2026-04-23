@@ -100,18 +100,7 @@ is_file_valid() {
 discover_credentials() {
     CREDS_FILE=""
 
-    # 1. Search ~/.kiro/ for any readable non-empty .json
-    if [ -d "$HOME/.kiro" ]; then
-        while IFS= read -r -d '' f; do
-            if [ -r "$f" ] && [ -s "$f" ]; then
-                CREDS_FILE="$f"
-                echo "  Found credential file in ~/.kiro/: $CREDS_FILE"
-                return
-            fi
-        done < <(find "$HOME/.kiro" -maxdepth 2 -name "*.json" -print0 2>/dev/null)
-    fi
-
-    # 2. Exact match in ~/.aws/sso/cache/
+    # 1. Exact match in ~/.aws/sso/cache/
     local exact="$HOME/.aws/sso/cache/kiro-auth-token.json"
     if is_file_valid "$exact"; then
         CREDS_FILE="$exact"
@@ -119,7 +108,7 @@ discover_credentials() {
         return
     fi
 
-    # 3. Scan ~/.aws/sso/cache/ for any .json with refreshToken and valid expiry
+    # 2. Scan ~/.aws/sso/cache/ for any .json with refreshToken and valid expiry
     if [ -d "$HOME/.aws/sso/cache" ]; then
         while IFS= read -r -d '' f; do
             if grep -q '"refreshToken"' "$f" 2>/dev/null && is_file_valid "$f"; then
@@ -128,6 +117,17 @@ discover_credentials() {
                 return
             fi
         done < <(find "$HOME/.aws/sso/cache" -maxdepth 1 -name "*.json" -print0 2>/dev/null)
+    fi
+
+    # 3. Fall back to ~/.kiro/ for any readable non-empty .json
+    if [ -d "$HOME/.kiro" ]; then
+        while IFS= read -r -d '' f; do
+            if [ -r "$f" ] && [ -s "$f" ]; then
+                CREDS_FILE="$f"
+                echo "  Found credential file in ~/.kiro/: $CREDS_FILE"
+                return
+            fi
+        done < <(find "$HOME/.kiro" -maxdepth 2 -name "*.json" -print0 2>/dev/null)
     fi
 
     echo "  WARNING: No valid Kiro credential file found."
@@ -141,9 +141,15 @@ discover_profile_arn() {
         echo ""
         return
     fi
-    local output
+    local output candidate
     output="$(kiro-cli whoami 2>/dev/null)" || { echo ""; return; }
-    echo "$output" | sed -n '3p'
+    candidate="$(echo "$output" | sed -n '5p')"
+    # Validate CodeWhisperer ARN format: arn:aws:codewhisperer:<region>:<account>:profile/<id>
+    if echo "$candidate" | grep -qE '^arn:aws:codewhisperer:[a-z0-9-]+:[0-9]+:profile/[a-zA-Z0-9_-]+$'; then
+        echo "$candidate"
+    else
+        echo ""
+    fi
 }
 
 # ─── .env File Writer ────────────────────────────────────────────────────────
@@ -162,7 +168,7 @@ sed_inplace() {
 }
 
 write_env() {
-    if [ -f ".env" ]; then
+    if [ -f "./gateway/.env" ]; then
         echo "  .env already exists — skipping creation."
         ENV_SKIPPED=true
         return
@@ -173,17 +179,17 @@ write_env() {
         exit 1
     fi
 
-    cp .env.example .env
+    cp .env.example ./gateway/.env
 
     # Patch PROXY_API_KEY
     local safe_key safe_creds
     safe_key="$(escape_sed "$PROXY_API_KEY")"
-    sed_inplace "s|^PROXY_API_KEY=.*|PROXY_API_KEY=\"${safe_key}\"|" .env
+    sed_inplace "s|^PROXY_API_KEY=.*|PROXY_API_KEY=\"${safe_key}\"|" ./gateway/.env
 
     # Patch KIRO_CREDS_FILE — uncomment and set if discovered
     if [ -n "$CREDS_FILE" ]; then
         safe_creds="$(escape_sed "$CREDS_FILE")"
-        sed_inplace "s|^#* *KIRO_CREDS_FILE=.*|KIRO_CREDS_FILE=\"${safe_creds}\"|" .env
+        sed_inplace "s|^#* *KIRO_CREDS_FILE=.*|KIRO_CREDS_FILE=\"${safe_creds}\"|" ./gateway/.env
     fi
 
     ENV_WRITTEN=true
@@ -243,9 +249,9 @@ print_summary() {
     fi
 
     if $ENV_WRITTEN; then
-        echo "  .env        : created"
+        echo "  gateway/.env        : created"
     elif $ENV_SKIPPED; then
-        echo "  .env        : already exists (not modified)"
+        echo "  gatway/.env        : already exists (not modified)"
     fi
 
     if [ -n "$PROFILE_ARN" ]; then
@@ -299,7 +305,7 @@ main() {
             echo "  Found: $PROFILE_ARN"
             local safe_arn
             safe_arn="$(escape_sed "$PROFILE_ARN")"
-            sed_inplace "s|^PROFILE_ARN=.*|PROFILE_ARN=\"${safe_arn}\"|" .env
+            sed_inplace "s|^PROFILE_ARN=.*|PROFILE_ARN=\"${safe_arn}\"|" ./gateway/.env
         else
             echo "  Not found via kiro-cli. Fill in PROFILE_ARN in .env manually."
             echo "  Run: kiro-cli whoami  (line 3 is your profile ARN)"
