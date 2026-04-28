@@ -604,7 +604,7 @@ func TestConvertToolResultsToKiroFormat(t *testing.T) {
 	results := []map[string]any{
 		{"tool_use_id": "call_1", "content": "file list"},
 	}
-	kiro := convertToolResultsToKiroFormat(results)
+	kiro := convertToolResultsToKiroFormat(results, 0)
 	if len(kiro) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(kiro))
 	}
@@ -624,10 +624,29 @@ func TestConvertToolResultsToKiroFormat_EmptyContent(t *testing.T) {
 	results := []map[string]any{
 		{"tool_use_id": "call_1", "content": ""},
 	}
-	kiro := convertToolResultsToKiroFormat(results)
+	kiro := convertToolResultsToKiroFormat(results, 0)
 	content := kiro[0]["content"].([]map[string]any)
 	if content[0]["text"] != "(empty result)" {
 		t.Fatal("expected placeholder for empty content")
+	}
+}
+
+func TestConvertToolResultsToKiroFormat_Truncation(t *testing.T) {
+	longContent := strings.Repeat("x", 25000)
+	results := []map[string]any{
+		{"tool_use_id": "call_1", "content": longContent},
+	}
+	kiro := convertToolResultsToKiroFormat(results, 20000)
+	content := kiro[0]["content"].([]map[string]any)
+	text := content[0]["text"].(string)
+	if len(text) <= 20000 {
+		t.Fatal("expected truncated content to be longer than limit due to notice")
+	}
+	if len(text) >= len(longContent) {
+		t.Fatal("expected content to be shorter than original")
+	}
+	if !strings.Contains(text, "[API Limitation]") {
+		t.Fatal("expected truncation notice in content")
 	}
 }
 
@@ -1034,7 +1053,7 @@ func TestBuildKiroHistory_UserAndAssistant(t *testing.T) {
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi"},
 	}
-	history := buildKiroHistory(msgs, "model-1")
+	history := buildKiroHistory(msgs, "model-1", 0)
 	if len(history) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(history))
 	}
@@ -1057,7 +1076,7 @@ func TestBuildKiroHistory_EmptyContent(t *testing.T) {
 	msgs := []UnifiedMessage{
 		{Role: "user", Content: ""},
 	}
-	history := buildKiroHistory(msgs, "m1")
+	history := buildKiroHistory(msgs, "m1", 0)
 	userMsg := history[0]["userInputMessage"].(map[string]any)
 	if userMsg["content"] != "(empty)" {
 		t.Fatal("expected (empty) placeholder for empty content")
@@ -1072,7 +1091,7 @@ func TestBuildKiroHistory_WithToolResults(t *testing.T) {
 			ToolResults: []map[string]any{{"tool_use_id": "c1", "content": "output"}},
 		},
 	}
-	history := buildKiroHistory(msgs, "m1")
+	history := buildKiroHistory(msgs, "m1", 0)
 	userMsg := history[0]["userInputMessage"].(map[string]any)
 	ctx := userMsg["userInputMessageContext"].(map[string]any)
 	results := ctx["toolResults"].([]map[string]any)
@@ -1091,7 +1110,7 @@ func TestBuildKiroHistory_WithToolUses(t *testing.T) {
 			},
 		},
 	}
-	history := buildKiroHistory(msgs, "m1")
+	history := buildKiroHistory(msgs, "m1", 0)
 	assistantMsg := history[0]["assistantResponseMessage"].(map[string]any)
 	toolUses := assistantMsg["toolUses"].([]map[string]any)
 	if len(toolUses) != 1 {
@@ -1110,7 +1129,7 @@ func TestBuildKiroHistory_WithImages(t *testing.T) {
 			Images:  []UnifiedImage{{MediaType: "image/jpeg", Data: "imgdata"}},
 		},
 	}
-	history := buildKiroHistory(msgs, "m1")
+	history := buildKiroHistory(msgs, "m1", 0)
 	userMsg := history[0]["userInputMessage"].(map[string]any)
 	images := userMsg["images"].([]map[string]any)
 	if len(images) != 1 {

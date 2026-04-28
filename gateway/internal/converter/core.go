@@ -163,7 +163,7 @@ func BuildKiroPayload(opts BuildKiroPayloadOptions) (*KiroPayloadResult, error) 
 		}
 	}
 
-	history := buildKiroHistory(historyMessages, opts.ModelID)
+	history := buildKiroHistory(historyMessages, opts.ModelID, cfg.MaxToolResultContentLength)
 
 	// 10. Build current message.
 	currentMsg := messages[len(messages)-1]
@@ -200,7 +200,7 @@ func BuildKiroPayload(opts BuildKiroPayloadOptions) (*KiroPayloadResult, error) 
 	}
 
 	if len(currentMsg.ToolResults) > 0 {
-		kiroToolResults := convertToolResultsToKiroFormat(currentMsg.ToolResults)
+		kiroToolResults := convertToolResultsToKiroFormat(currentMsg.ToolResults, cfg.MaxToolResultContentLength)
 		if len(kiroToolResults) > 0 {
 			userInputCtx["toolResults"] = kiroToolResults
 		}
@@ -475,8 +475,9 @@ func convertImagesToKiroFormat(images []UnifiedImage) []map[string]any {
 // ---------------------------------------------------------------------------
 
 // convertToolResultsToKiroFormat converts unified tool results to the Kiro
-// API wire format.
-func convertToolResultsToKiroFormat(results []map[string]any) []map[string]any {
+// API wire format. If maxLen > 0, content exceeding that length is truncated
+// with a notice so the model knows it was cut.
+func convertToolResultsToKiroFormat(results []map[string]any, maxLen int) []map[string]any {
 	if len(results) == 0 {
 		return nil
 	}
@@ -486,6 +487,14 @@ func convertToolResultsToKiroFormat(results []map[string]any) []map[string]any {
 		contentText := extractTextFromAny(tr["content"])
 		if contentText == "" {
 			contentText = "(empty result)"
+		}
+
+		if maxLen > 0 && len(contentText) > maxLen {
+			log.Printf("Tool result for %s truncated: %d chars > %d limit",
+				stringVal(tr, "tool_use_id"), len(contentText), maxLen)
+			contentText = contentText[:maxLen] +
+				fmt.Sprintf("\n\n[API Limitation] Tool result truncated at %d characters due to payload size limits. "+
+					"Re-read or re-request the resource if you need the full content.", maxLen)
 		}
 
 		out = append(out, map[string]any{
@@ -943,7 +952,7 @@ func ensureAlternatingRoles(messages []UnifiedMessage) []UnifiedMessage {
 // buildKiroHistory converts a slice of unified messages into the Kiro API
 // history format: alternating {"userInputMessage": {...}} and
 // {"assistantResponseMessage": {...}} entries.
-func buildKiroHistory(messages []UnifiedMessage, modelID string) []map[string]any {
+func buildKiroHistory(messages []UnifiedMessage, modelID string, maxToolResultLen int) []map[string]any {
 	history := make([]map[string]any, 0, len(messages))
 
 	for _, msg := range messages {
@@ -970,7 +979,7 @@ func buildKiroHistory(messages []UnifiedMessage, modelID string) []map[string]an
 
 			// Tool results go into userInputMessageContext.
 			if len(msg.ToolResults) > 0 {
-				kiroResults := convertToolResultsToKiroFormat(msg.ToolResults)
+				kiroResults := convertToolResultsToKiroFormat(msg.ToolResults, maxToolResultLen)
 				if len(kiroResults) > 0 {
 					userInput["userInputMessageContext"] = map[string]any{
 						"toolResults": kiroResults,

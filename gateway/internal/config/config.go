@@ -67,7 +67,8 @@ type Config struct {
 	FallbackModels []FallbackModel
 
 	// Limits
-	ToolDescriptionMaxLength int
+	ToolDescriptionMaxLength   int
+	MaxToolResultContentLength int
 	ModelCacheTTL            time.Duration
 	DefaultMaxInputTokens    int
 	MaxRetries               int
@@ -137,6 +138,7 @@ func Load() (*Config, error) {
 	cfg.FallbackModels = defaultFallbackModels()
 
 	cfg.ToolDescriptionMaxLength = envInt("TOOL_DESCRIPTION_MAX_LENGTH", 10000)
+	cfg.MaxToolResultContentLength = envInt("MAX_TOOL_RESULT_CONTENT_LENGTH", 150000)
 	cfg.ModelCacheTTL = time.Duration(envInt("MODEL_CACHE_TTL", 3600)) * time.Second
 	cfg.DefaultMaxInputTokens = envInt("DEFAULT_MAX_INPUT_TOKENS", 200000)
 	cfg.MaxRetries = envInt("MAX_RETRIES", 3)
