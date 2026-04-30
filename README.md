@@ -40,6 +40,7 @@
 | **Vision Support** | Send images to a model |
 | **Tool Calling** | Supports function calls |
 | **Full message history** | Passes complete conversation context |
+| **Payload size management** | Automatically compacts Write tool history and caps large tool results to prevent oversized requests |
 | **Streaming** | Full SSE streaming support |
 | **Retry Logic** | Automatic retries on errors (403, 429, 5xx) |
 | **Extended model list** | Including versioned models |
@@ -644,6 +645,20 @@ with client.messages.stream(
 ```
 
 </details>
+
+## Payload Size Management
+
+In long conversations, tool results accumulate in history and can push the total request payload over Kiro's limit, causing an empty HTTP 200 response. The gateway manages this in two ways:
+
+1. **Write tool compaction** — `Write` tool inputs in history are always replaced with a compact summary (e.g. `[File written: /path/to/file — 8,432 chars]`). The file content is already on disk so the model doesn't need it in history.
+2. **Per-result cap** — individual tool results exceeding `MAX_TOOL_RESULT_CONTENT_LENGTH` are truncated with an `[API Limitation]` notice so the model knows to re-read if needed.
+
+The current message is never affected — only history entries. Tools like `WebFetch` and `WebSearch` return ephemeral data and are never truncated.
+
+```env
+# Maximum characters for a single tool result in history (default: 150000 = ~150KB)
+MAX_TOOL_RESULT_CONTENT_LENGTH=150000
+```
 
 ---
 

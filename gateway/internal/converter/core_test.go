@@ -1136,3 +1136,40 @@ func TestBuildKiroHistory_WithImages(t *testing.T) {
 		t.Fatal("expected 1 image in history")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// compactWriteToolInput / buildKiroHistory Write compaction
+// ---------------------------------------------------------------------------
+
+func TestBuildKiroHistory_CompactsWriteToolInput(t *testing.T) {
+	largeContent := strings.Repeat("x", 5000)
+	msgs := []UnifiedMessage{
+		{
+			Role: "assistant",
+			ToolCalls: []map[string]any{
+				{
+					"id":   "call_w1",
+					"type": "tool_use",
+					"name": "write",
+					"input": map[string]any{
+						"file_path": "/tmp/foo.go",
+						"content":   largeContent,
+					},
+				},
+			},
+		},
+	}
+	history := buildKiroHistory(msgs, "model-1", 0)
+	toolUses := history[0]["assistantResponseMessage"].(map[string]any)["toolUses"].([]map[string]any)
+	input := toolUses[0]["input"].(map[string]any)
+	content, _ := input["content"].(string)
+	if strings.Contains(content, "x") {
+		t.Fatal("expected Write content to be compacted, got raw content")
+	}
+	if !strings.Contains(content, "/tmp/foo.go") {
+		t.Fatal("expected compacted summary to include file path")
+	}
+	if !strings.Contains(content, "5000") {
+		t.Fatal("expected compacted summary to include original char count")
+	}
+}

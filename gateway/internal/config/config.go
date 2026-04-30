@@ -362,10 +362,10 @@ func normalizePath(p string) string {
 func defaultFallbackModels() []FallbackModel {
 	return []FallbackModel{
 		{ModelID: "auto"},
-		{ModelID: "claude-opus-4.6"},
-		{ModelID: "claude-opus-4.5"},
-		{ModelID: "claude-sonnet-4.6"},
-		{ModelID: "claude-sonnet-4.5"},
-		{ModelID: "claude-haiku-4.5"},
+		{ModelID: "claude-opus-4-6"},
+		{ModelID: "claude-opus-4-5"},
+		{ModelID: "claude-sonnet-4-6"},
+		{ModelID: "claude-sonnet-4-5"},
+		{ModelID: "claude-haiku-4-5"},
 	}
 }

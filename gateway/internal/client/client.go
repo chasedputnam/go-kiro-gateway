@@ -17,7 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/rs/zerolog/log"
 	"net"
 	"net/http"
 	"net/url"
@@ -109,6 +109,7 @@ func (c *kiroHTTPClient) RequestWithRetry(ctx context.Context, method, reqURL st
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal request payload: %w", err)
 			}
+			log.Debug().Int("payload_bytes", len(bodyBytes)).Msg("Kiro request payload size")
 		}
 
 		// Build the HTTP request.
@@ -126,7 +127,7 @@ func (c *kiroHTTPClient) RequestWithRetry(ctx context.Context, method, reqURL st
 		// Pick the right client.
 		client := c.clientForRequest(stream)
 
-		log.Printf("Sending request to Kiro API (attempt %d/%d, stream=%v)...", attempt+1, maxRetries, stream)
+		log.Debug().Int("attempt", attempt+1).Int("max", maxRetries).Bool("stream", stream).Msg("Sending request to Kiro API")
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -140,7 +141,7 @@ func (c *kiroHTTPClient) RequestWithRetry(ctx context.Context, method, reqURL st
 			// Network/timeout error — exponential backoff and retry.
 			if attempt < maxRetries-1 {
 				delay := c.backoffDelay(attempt)
-				log.Printf("Request error: %v — waiting %v (attempt %d/%d)", err, delay, attempt+1, maxRetries)
+				log.Debug().Err(err).Dur("delay", delay).Int("attempt", attempt+1).Int("max", maxRetries).Msg("Request error, retrying")
 				if err := sleepWithContext(ctx, delay); err != nil {
 					return nil, fmt.Errorf("retry interrupted: %w", err)
 				}
@@ -156,9 +157,9 @@ func (c *kiroHTTPClient) RequestWithRetry(ctx context.Context, method, reqURL st
 		case resp.StatusCode == http.StatusForbidden:
 			// 403 — force token refresh and retry.
 			drainAndClose(resp)
-			log.Printf("Received 403, refreshing token (attempt %d/%d)", attempt+1, maxRetries)
+			log.Debug().Int("attempt", attempt+1).Int("max", maxRetries).Msg("Received 403, refreshing token")
 			if refreshErr := c.auth.ForceRefresh(ctx); refreshErr != nil {
-				log.Printf("Token refresh failed: %v", refreshErr)
+				log.Debug().Err(refreshErr).Msg("Token refresh failed")
 			}
 			lastErr = fmt.Errorf("HTTP 403 Forbidden")
 			continue
@@ -167,7 +168,7 @@ func (c *kiroHTTPClient) RequestWithRetry(ctx context.Context, method, reqURL st
 			// 429 — rate limited, exponential backoff.
 			drainAndClose(resp)
 			delay := c.backoffDelay(attempt)
-			log.Printf("Received 429, waiting %v (attempt %d/%d)", delay, attempt+1, maxRetries)
+			log.Debug().Dur("delay", delay).Int("attempt", attempt+1).Int("max", maxRetries).Msg("Received 429, rate limited")
 			lastErr = fmt.Errorf("HTTP 429 Too Many Requests")
 			if err := sleepWithContext(ctx, delay); err != nil {
 				return nil, fmt.Errorf("retry interrupted: %w", err)
@@ -178,7 +179,7 @@ func (c *kiroHTTPClient) RequestWithRetry(ctx context.Context, method, reqURL st
 			// 5xx — server error, exponential backoff.
 			drainAndClose(resp)
 			delay := c.backoffDelay(attempt)
-			log.Printf("Received %d, waiting %v (attempt %d/%d)", resp.StatusCode, delay, attempt+1, maxRetries)
+			log.Debug().Int("status", resp.StatusCode).Dur("delay", delay).Int("attempt", attempt+1).Int("max", maxRetries).Msg("Server error, retrying")
 			lastErr = fmt.Errorf("HTTP %d server error", resp.StatusCode)
 			if err := sleepWithContext(ctx, delay); err != nil {
 				return nil, fmt.Errorf("retry interrupted: %w", err)
@@ -238,7 +239,7 @@ func buildTransport(cfg *config.Config) *http.Transport {
 		proxyURL := normalizeProxyURL(cfg.VPNProxyURL)
 		parsed, err := url.Parse(proxyURL)
 		if err != nil {
-			log.Printf("Warning: invalid VPN_PROXY_URL %q: %v — connecting directly", cfg.VPNProxyURL, err)
+			log.Warn().Str("proxy_url", cfg.VPNProxyURL).Err(err).Msg("Invalid VPN_PROXY_URL, connecting directly")
 			return transport
 		}
 
@@ -251,7 +252,7 @@ func buildTransport(cfg *config.Config) *http.Transport {
 			return parsed, nil
 		}
 
-		log.Printf("Proxy configured: %s (localhost excluded)", proxyURL)
+		log.Debug().Str("proxy", proxyURL).Msg("Proxy configured (localhost excluded)")
 	}
 
 	return transport
