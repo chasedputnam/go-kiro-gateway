@@ -1,40 +1,65 @@
-# Kiro Gateway - Docker Image
-# Optimized single-stage build
+# Go Kiro Gateway - Docker Image
+#
+# Multi-stage build using repo root as context (context: .).
+# The gateway source lives under gateway/ relative to the repo root.
+#
+# Build:
+#   docker build -t go-kiro-gateway .
+#   docker build --build-arg VERSION=1.0.0 -t go-kiro-gateway .
+#
+# Run:
+#   docker run -p 8000:8000 --env-file .env go-kiro-gateway
 
-FROM python:3.10-slim
+# ---------------------------------------------------------------------------
+# Build stage
+# ---------------------------------------------------------------------------
+FROM golang:1.25-alpine AS builder
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN apk add --no-cache git
 
-# Create non-root user for security
-RUN groupadd -r kiro && useradd -r -g kiro kiro
+WORKDIR /src
 
-# Set working directory
+# Cache module downloads (paths relative to repo root context).
+COPY gateway/go.mod gateway/go.sum ./
+RUN go mod download
+
+# Copy gateway source and build a fully static binary.
+COPY gateway/ .
+
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux \
+    go build -trimpath \
+    -ldflags "-X main.version=${VERSION} -s -w" \
+    -o /go-kiro-gateway ./cmd/gateway
+
+# ---------------------------------------------------------------------------
+# Runtime stage
+# ---------------------------------------------------------------------------
+FROM alpine:3.21
+
+# Install CA certificates and curl for health checks.
+RUN apk add --no-cache ca-certificates curl
+
+# Create non-root user.
+RUN addgroup -S kiro && adduser -S -G kiro kiro
+
+# Copy the compiled binary.
+COPY --from=builder /go-kiro-gateway /usr/local/bin/go-kiro-gateway
+
+# Create debug logs directory with proper permissions.
+RUN mkdir -p /app/debug_logs && chown -R kiro:kiro /app/debug_logs
+
 WORKDIR /app
 
-# Install dependencies first (better layer caching)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY --chown=kiro:kiro . .
-
-# Create directory for debug logs with proper permissions
-RUN mkdir -p debug_logs && chown -R kiro:kiro debug_logs
-
-# Switch to non-root user
+# Switch to non-root user.
 USER kiro
 
-# Expose port
+# Expose the default gateway port.
 EXPOSE 8000
 
-# Health check
-# Using httpx (our main HTTP library) instead of requests
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/health', timeout=5)"
+# Health check querying the /health endpoint.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["curl", "-sf", "http://localhost:8000/health"]
 
-# Run the application
-CMD ["python", "main.py"]
+# Entry point.
+ENTRYPOINT ["go-kiro-gateway"]

@@ -2,6 +2,7 @@
 
 **An API gateway proxy for Kiro API (Amazon Q Developer / AWS CodeWhisperer)**
 
+[![Release](https://img.shields.io/github/v/release/chasedputnam/go-kiro-gateway)](https://github.com/chasedputnam/go-kiro-gateway/releases/latest)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Go 1.25+](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev/dl/)
 [![chi](https://img.shields.io/badge/chi-v5-00ADD8.svg)](https://github.com/go-chi/chi)
@@ -63,7 +64,36 @@
 
 ### Installation (Pre-built Binary)
 
-Download the latest release for your platform from the [Releases](https://github.com/chasedputnam/go-kiro-gateway/releases) page.
+Download the latest release for your platform from the [Releases](https://github.com/chasedputnam/go-kiro-gateway/releases) page, or use the commands below:
+
+**macOS (Apple Silicon):**
+```bash
+curl -L https://github.com/chasedputnam/go-kiro-gateway/releases/latest/download/go-kiro-gateway-darwin-arm64 -o go-kiro-gateway
+chmod +x go-kiro-gateway
+```
+
+**macOS (Intel):**
+```bash
+curl -L https://github.com/chasedputnam/go-kiro-gateway/releases/latest/download/go-kiro-gateway-darwin-amd64 -o go-kiro-gateway
+chmod +x go-kiro-gateway
+```
+
+**Linux (amd64):**
+```bash
+curl -L https://github.com/chasedputnam/go-kiro-gateway/releases/latest/download/go-kiro-gateway-linux-amd64 -o go-kiro-gateway
+chmod +x go-kiro-gateway
+```
+
+**Linux (arm64):**
+```bash
+curl -L https://github.com/chasedputnam/go-kiro-gateway/releases/latest/download/go-kiro-gateway-linux-arm64 -o go-kiro-gateway
+chmod +x go-kiro-gateway
+```
+
+**Windows (amd64):**
+```powershell
+curl -L https://github.com/chasedputnam/go-kiro-gateway/releases/latest/download/go-kiro-gateway-windows-amd64.exe -o go-kiro-gateway.exe
+```
 
 ### Installation (Build from Source)
 
@@ -241,9 +271,25 @@ If you need to manually extract the refresh token (e.g., for debugging), you can
 
 ---
 
-## Docker Deployment (Pending Container Repository Image Release)
+## Docker Deployment
 
 ### Quick Start
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/chasedputnam/go-kiro-gateway:latest
+
+# Or run directly
+docker run -d \
+  -p 8000:8000 \
+  -e PROXY_API_KEY="my-super-secret-password-123" \
+  -e REFRESH_TOKEN="your_refresh_token" \
+  -e PROFILE_ARN="arn:aws:codewhisperer:us-east-1:..." \
+  --name go-kiro-gateway \
+  ghcr.io/chasedputnam/go-kiro-gateway:latest
+```
+
+### Docker Compose
 
 ```bash
 # 1. Clone and configure
@@ -252,7 +298,7 @@ cd go-kiro-gateway
 cp .env.example .env
 # Edit .env with your credentials
 
-# 2. Run with docker-compose
+# 2. Run with docker-compose (from the gateway/ directory)
 cd gateway
 docker-compose up -d
 
@@ -317,6 +363,8 @@ docker run -d -p 8000:8000 --env-file .env --name go-kiro-gateway ghcr.io/chased
 </details>
 
 ### Docker Compose Configuration
+
+The `docker-compose.yml` lives in the `gateway/` directory. Run all compose commands from there.
 
 Edit `gateway/docker-compose.yml` and uncomment volume mounts for your OS:
 
