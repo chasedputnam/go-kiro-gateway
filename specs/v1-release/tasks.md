@@ -63,7 +63,7 @@ Implementation plan based on the requirements and design documents.
   - Push and confirm CI passes on main before tagging
   - References: Requirement 1.3, 3.3, 6.5
 
-- [ ] 10. Tag `v1.0.0` and push
+- [x] 10. Tag `v1.0.0` and push
   - Create annotated tag: `git tag -a v1.0.0 -m "Release v1.0.0"`
   - Push the tag: `git push origin v1.0.0`
   - Confirm `docker.yml` and `release.yml` both trigger and complete successfully
