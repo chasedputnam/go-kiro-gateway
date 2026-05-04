@@ -188,6 +188,20 @@ func BuildKiroPayload(opts BuildKiroPayloadOptions) (*KiroPayloadResult, error) 
 		currentContent = "Continue"
 	}
 
+	// Cap current message content when there is no history — this targets
+	// single-shot large-context requests (e.g. security monitors sending full
+	// conversation transcripts) without affecting normal multi-turn sessions.
+	if cfg.MaxCurrentMessageLength > 0 && len(history) == 0 && len(currentContent) > cfg.MaxCurrentMessageLength {
+		log.Debug().
+			Int("original_len", len(currentContent)).
+			Int("limit", cfg.MaxCurrentMessageLength).
+			Msg("current message content truncated to fit payload limit")
+		currentContent = currentContent[:cfg.MaxCurrentMessageLength] +
+			"\n\n[API Limitation] Message content truncated at " +
+			fmt.Sprintf("%d", cfg.MaxCurrentMessageLength) +
+			" characters due to payload size limits."
+	}
+
 	// Process images.
 	kiroImages := convertImagesToKiroFormat(currentMsg.Images)
 
@@ -404,7 +418,7 @@ func convertToolsToKiroFormat(tools []UnifiedTool) []map[string]any {
 		desc := t.Description
 		if strings.TrimSpace(desc) == "" {
 			desc = fmt.Sprintf("Tool: %s", t.Name)
-			log.Printf("Tool '%s' has empty description, using placeholder", t.Name)
+			log.Debug().Str("tool", t.Name).Msg("Tool has empty description, using placeholder")
 		}
 
 		out = append(out, map[string]any{
@@ -435,7 +449,7 @@ func convertImagesToKiroFormat(images []UnifiedImage) []map[string]any {
 		mediaType := img.MediaType
 
 		if data == "" {
-			log.Printf("Skipping image with empty data")
+			log.Warn().Msg("Skipping image with empty data")
 			continue
 		}
 
@@ -468,7 +482,7 @@ func convertImagesToKiroFormat(images []UnifiedImage) []map[string]any {
 	}
 
 	if len(out) > 0 {
-		log.Printf("Converted %d image(s) to Kiro format", len(out))
+		log.Debug().Int("count", len(out)).Msg("Converted images to Kiro format")
 	}
 	return out
 }
@@ -493,8 +507,7 @@ func convertToolResultsToKiroFormat(results []map[string]any, maxLen int) []map[
 		}
 
 		if maxLen > 0 && len(contentText) > maxLen {
-			log.Printf("Tool result for %s truncated: %d chars > %d limit",
-				stringVal(tr, "tool_use_id"), len(contentText), maxLen)
+			log.Debug().Str("tool_use_id", stringVal(tr, "tool_use_id")).Int("original", len(contentText)).Int("limit", maxLen).Msg("Tool result truncated")
 			contentText = contentText[:maxLen] +
 				fmt.Sprintf("\n\n[API Limitation] Tool result truncated at %d characters due to payload size limits. "+
 					"Re-read or re-request the resource if you need the full content.", maxLen)
@@ -629,7 +642,7 @@ func injectThinkingTags(content string, cfg *config.Config) string {
 		thinkingInstruction,
 	)
 
-	log.Printf("Injecting fake reasoning tags with max_tokens=%d", cfg.FakeReasoningMaxTokens)
+	log.Debug().Int("max_tokens", cfg.FakeReasoningMaxTokens).Msg("Injecting fake reasoning tags")
 
 	return prefix + content
 }
@@ -771,8 +784,7 @@ func stripAllToolContent(messages []UnifiedMessage) ([]UnifiedMessage, bool) {
 
 	had := totalCalls > 0 || totalResults > 0
 	if had {
-		log.Printf("Converted tool content to text (no tools defined): %d tool_calls, %d tool_results",
-			totalCalls, totalResults)
+		log.Debug().Int("tool_calls", totalCalls).Int("tool_results", totalResults).Msg("Converted tool content to text (no tools defined)")
 	}
 	return result, had
 }
@@ -809,8 +821,7 @@ func ensureAssistantBeforeToolResults(messages []UnifiedMessage) ([]UnifiedMessa
 		}
 
 		// Convert orphaned tool_results to text.
-		log.Printf("Converting %d orphaned tool_results to text (no preceding assistant with tool_calls)",
-			len(msg.ToolResults))
+		log.Debug().Int("count", len(msg.ToolResults)).Msg("Converting orphaned tool_results to text (no preceding assistant with tool_calls)")
 
 		trText := toolResultsToText(msg.ToolResults)
 		original := msg.Content
@@ -882,7 +893,7 @@ func ensureFirstMessageIsUser(messages []UnifiedMessage) []UnifiedMessage {
 		return messages
 	}
 
-	log.Printf("First message is '%s', prepending synthetic user message", messages[0].Role)
+	log.Debug().Str("role", messages[0].Role).Msg("First message is not user, prepending synthetic user message")
 	return append([]UnifiedMessage{{Role: "user", Content: "(empty)"}}, messages...)
 }
 
@@ -897,7 +908,7 @@ func normalizeMessageRoles(messages []UnifiedMessage) []UnifiedMessage {
 	count := 0
 	for _, msg := range messages {
 		if msg.Role != "user" && msg.Role != "assistant" {
-			log.Printf("Normalizing role '%s' to 'user'", msg.Role)
+			log.Debug().Str("role", msg.Role).Msg("Normalizing unknown role to 'user'")
 			out = append(out, UnifiedMessage{
 				Role:        "user",
 				Content:     msg.Content,
@@ -911,7 +922,7 @@ func normalizeMessageRoles(messages []UnifiedMessage) []UnifiedMessage {
 		}
 	}
 	if count > 0 {
-		log.Printf("Normalized %d message(s) with unknown roles to 'user'", count)
+		log.Debug().Int("count", count).Msg("Normalized messages with unknown roles to 'user'")
 	}
 	return out
 }
@@ -943,7 +954,7 @@ func ensureAlternatingRoles(messages []UnifiedMessage) []UnifiedMessage {
 	}
 
 	if count > 0 {
-		log.Printf("Inserted %d synthetic filler message(s) to ensure alternation", count)
+		log.Debug().Int("count", count).Msg("Inserted synthetic filler messages to ensure alternation")
 	}
 	return result
 }

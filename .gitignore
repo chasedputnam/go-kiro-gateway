@@ -2,12 +2,17 @@
 .env
 .env.local
 .DS_Store
+*.env.bkp
+gateway/.env.bkp
 
 # IDE
 .vscode/
 .idea/
 .shard/
 .kiro/
+
+# Claude local settings (machine-specific permissions)
+.claude/settings.local.json
 
 # Debug logs (generated when DEBUG_MODE is enabled)
 debug_logs*/

@@ -10,11 +10,11 @@ package converter
 
 import (
 	"encoding/json"
-	"log"
 	"strings"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
+	"github.com/rs/zerolog/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -161,8 +161,7 @@ func convertAnthropicMessages(messages []models.AnthropicMessage) []UnifiedMessa
 	}
 
 	if totalToolCalls > 0 || totalToolRes > 0 || totalImages > 0 {
-		log.Printf("Converted %d Anthropic messages: %d tool_calls, %d tool_results, %d images",
-			len(messages), totalToolCalls, totalToolRes, totalImages)
+		log.Debug().Int("messages", len(messages)).Int("tool_calls", totalToolCalls).Int("tool_results", totalToolRes).Int("images", totalImages).Msg("Converted Anthropic messages")
 	}
 
 	return unified
@@ -376,7 +375,7 @@ func extractImagesFromToolResults(content any) []UnifiedImage {
 	}
 
 	if len(images) > 0 {
-		log.Printf("Extracted %d image(s) from tool_result content", len(images))
+		log.Debug().Int("count", len(images)).Msg("Extracted images from tool_result content")
 	}
 
 	return images

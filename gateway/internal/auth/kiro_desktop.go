@@ -19,11 +19,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -137,7 +138,7 @@ func (r *kiroDesktopRefresher) refresh(ctx context.Context, m *kiroAuthManager) 
 		m.profileARN = refreshResp.ProfileARN
 	}
 
-	log.Printf("Token refreshed via Kiro Desktop Auth, expires: %s", expiresAt.Format(time.RFC3339))
+	log.Info().Str("expires_at", expiresAt.Format(time.RFC3339)).Msg("Token refreshed via Kiro Desktop Auth")
 
 	// Persist refreshed tokens back to the credential source.
 	saveRefreshedTokens(m, refreshResp.AccessToken, refreshResp.RefreshToken, expiresAt)
@@ -186,22 +187,22 @@ func saveTokensToFile(path, accessToken, refreshToken string, expiresAt time.Tim
 
 	out, err := json.MarshalIndent(existing, "", "  ")
 	if err != nil {
-		log.Printf("Warning: failed to marshal credentials for saving: %v", err)
+		log.Warn().Err(err).Msg("Failed to marshal credentials for saving")
 		return
 	}
 
 	if err := os.WriteFile(path, out, 0600); err != nil {
-		log.Printf("Warning: failed to save credentials to %s: %v", path, err)
+		log.Warn().Err(err).Str("path", path).Msg("Failed to save credentials to file")
 		return
 	}
 
-	log.Printf("Credentials saved to %s", path)
+	log.Info().Str("path", path).Msg("Credentials saved to file")
 }
 
 // saveTokensToSQLite writes refreshed tokens back to the kiro-cli SQLite
 // database. Delegates to saveCredentialsToSQLite in sqlite.go.
 func saveTokensToSQLite(m *kiroAuthManager, accessToken, refreshToken string, expiresAt time.Time) {
 	if err := saveCredentialsToSQLite(m.sqliteDB, m.sqliteTokenKey, accessToken, refreshToken, expiresAt); err != nil {
-		log.Printf("Warning: failed to save credentials to SQLite: %v", err)
+		log.Warn().Err(err).Msg("Failed to save credentials to SQLite")
 	}
 }

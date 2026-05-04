@@ -435,3 +435,42 @@ func TestGenerateToolUseID(t *testing.T) {
 		t.Errorf("tool use ID should start with toolu_, got %q", id)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: StreamToAnthropic — error path
+// ---------------------------------------------------------------------------
+
+func TestStreamToAnthropic_ErrorEventSendsMessageStop(t *testing.T) {
+	ch := make(chan KiroEvent, 3)
+	ch <- KiroEvent{Type: EventTypeContent, Content: "partial content"}
+	ch <- KiroEvent{Type: EventTypeError, Error: &FirstTokenTimeoutError{}}
+	ch <- KiroEvent{Type: EventTypeContent, Content: "should not appear"}
+	close(ch)
+
+	rec := httptest.NewRecorder()
+	StreamToAnthropic(rec, ch, defaultAnthropicOpts())
+
+	body := rec.Body.String()
+
+	// On error, the stream must still be terminated with message_delta +
+	// message_stop so clients tracking sawMessageStart/sawMessageEnd
+	// (e.g. pi Anthropic SDK) don't throw "stream ended before message_stop".
+	if !strings.Contains(body, "event: message_stop") {
+		t.Error("expected message_stop even after error — client needs clean stream termination")
+	}
+	if !strings.Contains(body, "event: message_delta") {
+		t.Error("expected message_delta even after error")
+	}
+	// A short error notice must be injected into the stream so the agent
+	// knows the response was truncated due to a gateway error.
+	if !strings.Contains(body, "[Gateway error:") {
+		t.Error("expected gateway error notice in stream content")
+	}
+	if strings.Contains(body, "should not appear") {
+		t.Error("content after error should not appear")
+	}
+	// Verify the partial content before the error was sent.
+	if !strings.Contains(body, "partial content") {
+		t.Error("partial content before error should have been sent")
+	}
+}

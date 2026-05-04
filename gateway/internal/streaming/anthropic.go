@@ -16,13 +16,13 @@ package streaming
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/parser"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/thinking"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/tokenizer"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ func formatSSEEvent(eventType string, data map[string]any) ([]byte, error) {
 func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType string, data map[string]any) {
 	raw, err := formatSSEEvent(eventType, data)
 	if err != nil {
-		log.Printf("Failed to marshal Anthropic event %q: %v", eventType, err)
+		log.Error().Err(err).Str("event_type", eventType).Msg("Failed to marshal Anthropic SSE event")
 		return
 	}
 	w.Write(raw)
@@ -245,7 +245,34 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 			// Anthropic format doesn't use credits in the same way; skip.
 
 		case EventTypeError:
-			log.Printf("Error during Anthropic streaming: %v", event.Error)
+			log.Error().Err(event.Error).Msg("Kiro API error during Anthropic streaming — sending clean stream termination")
+			// Inject a short error notice into the stream so the agent sees
+			// what happened, then close blocks and terminate cleanly.
+			ensureTextBlock()
+			errMsg := fmt.Sprintf("\n\n[Gateway error: %v]", event.Error)
+			writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": textBlockIndex,
+				"delta": map[string]any{
+					"type": "text_delta",
+					"text": errMsg,
+				},
+			})
+			closeThinkingBlock()
+			closeTextBlock()
+			writeSSEEvent(w, flusher, "message_delta", map[string]any{
+				"type": "message_delta",
+				"delta": map[string]any{
+					"stop_reason":   "end_turn",
+					"stop_sequence": nil,
+				},
+				"usage": map[string]any{
+					"output_tokens": tokenizer.CountTokens(fullContent + fullThinkingContent),
+				},
+			})
+			writeSSEEvent(w, flusher, "message_stop", map[string]any{
+				"type": "message_stop",
+			})
 			return nil
 
 		case EventTypeDone:

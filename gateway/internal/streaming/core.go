@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -27,6 +26,7 @@ import (
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/parser"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/thinking"
+	"github.com/rs/zerolog/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ func parseKiroStreamInternal(ctx context.Context, r io.Reader, opts StreamOption
 			opts.ThinkingOpenTags,
 			opts.ThinkingInitialBuffer,
 		)
-		log.Printf("Thinking parser initialised with mode: %s", opts.ThinkingHandlingMode)
+		log.Debug().Str("mode", string(opts.ThinkingHandlingMode)).Msg("Thinking parser initialised")
 	}
 
 	// Tool call accumulation state.
@@ -204,12 +204,10 @@ func parseKiroStreamInternal(ctx context.Context, r io.Reader, opts StreamOption
 			if err := json.Unmarshal([]byte(args), &parsed); err != nil {
 				// Truncated or malformed — check if truncated.
 				if parser.IsToolCallTruncated(args) {
-					log.Printf("Tool call truncated by Kiro API: tool=%q, id=%s, size=%d bytes",
-						currentTC.name, currentTC.id, len(args))
+					log.Warn().Str("tool", currentTC.name).Str("id", currentTC.id).Int("size", len(args)).Msg("Tool call truncated by Kiro API")
 					tc.IsTruncated = true
 				} else {
-					log.Printf("Failed to parse tool %q arguments: %v. Raw: %.200s",
-						currentTC.name, err, args)
+					log.Warn().Err(err).Str("tool", currentTC.name).Str("raw", fmt.Sprintf("%.200s", args)).Msg("Failed to parse tool arguments")
 				}
 				tc.Arguments = "{}"
 			} else {
@@ -459,8 +457,7 @@ func deduplicateToolCalls(calls []ToolCallInfo) []ToolCallInfo {
 		}
 		// Keep the one with more complete arguments.
 		if tc.Arguments != "{}" && (existing.Arguments == "{}" || len(tc.Arguments) > len(existing.Arguments)) {
-			log.Printf("Replacing tool call %s with better arguments: %d -> %d",
-				tc.ID, len(existing.Arguments), len(tc.Arguments))
+			log.Debug().Str("id", tc.ID).Int("old_len", len(existing.Arguments)).Int("new_len", len(tc.Arguments)).Msg("Replacing tool call with better arguments")
 			byID[tc.ID] = tc
 		}
 	}
@@ -486,7 +483,7 @@ func deduplicateToolCalls(calls []ToolCallInfo) []ToolCallInfo {
 	}
 
 	if len(calls) != len(unique) {
-		log.Printf("Deduplicated tool calls: %d -> %d", len(calls), len(unique))
+		log.Debug().Int("before", len(calls)).Int("after", len(unique)).Msg("Deduplicated tool calls")
 	}
 
 	return unique
@@ -542,7 +539,7 @@ func StreamWithFirstTokenRetry(
 			}
 
 			if attempt > 0 {
-				log.Printf("Retry attempt %d/%d after first token timeout", attempt+1, maxRetries)
+				log.Info().Int("attempt", attempt+1).Int("max", maxRetries).Msg("Retry after first token timeout")
 			}
 
 			resp, err := makeRequest(ctx)
@@ -558,7 +555,7 @@ func StreamWithFirstTokenRetry(
 				body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 				resp.Body.Close()
 				errText := string(body)
-				log.Printf("Error from Kiro API: %d - %s", resp.StatusCode, errText)
+				log.Error().Int("status", resp.StatusCode).Str("body", errText).Msg("Error from Kiro API")
 				send(ctx, out, KiroEvent{
 					Type:  EventTypeError,
 					Error: fmt.Errorf("upstream API error (%d): %s", resp.StatusCode, errText),
@@ -591,8 +588,7 @@ func StreamWithFirstTokenRetry(
 			}
 
 			if timedOut {
-				log.Printf("[FirstTokenTimeout] Attempt %d/%d failed — model did not respond within %s",
-					attempt+1, maxRetries, opts.FirstTokenTimeout)
+				log.Warn().Int("attempt", attempt+1).Int("max", maxRetries).Dur("timeout", opts.FirstTokenTimeout).Msg("[FirstTokenTimeout] Model did not respond in time")
 				continue
 			}
 
@@ -601,7 +597,7 @@ func StreamWithFirstTokenRetry(
 		}
 
 		// All retries exhausted — send 504 error.
-		log.Printf("[FirstTokenTimeout] All %d attempts exhausted", maxRetries)
+		log.Error().Int("attempts", maxRetries).Msg("[FirstTokenTimeout] All attempts exhausted")
 		send(ctx, out, KiroEvent{
 			Type: EventTypeError,
 			Error: fmt.Errorf(

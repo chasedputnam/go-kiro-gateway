@@ -26,13 +26,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	// Pure-Go SQLite driver — no CGO required.
 	_ "modernc.org/sqlite"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -131,7 +132,7 @@ func loadCredentialsFromSQLite(dbPath string) (*credsFileData, string, error) {
 		if err == nil && val != "" {
 			tokenJSON = val
 			tokenKey = key
-			log.Printf("Loaded credentials from SQLite key: %s", key)
+			log.Info().Str("key", key).Msg("Loaded credentials from SQLite")
 			break
 		}
 	}
@@ -168,7 +169,7 @@ func loadCredentialsFromSQLite(dbPath string) (*credsFileData, string, error) {
 				if reg.Region != "" && creds.Region == "" {
 					creds.Region = reg.Region
 				}
-				log.Printf("Loaded device registration from SQLite key: %s", key)
+				log.Info().Str("key", key).Msg("Loaded device registration from SQLite")
 			}
 			break
 		}
@@ -242,10 +243,10 @@ func saveCredentialsToSQLite(dbPath, key string, accessToken, refreshToken strin
 		}
 		rows, _ := result.RowsAffected()
 		if rows > 0 {
-			log.Printf("Credentials saved to SQLite key: %s", key)
+			log.Info().Str("key", key).Msg("Credentials saved to SQLite")
 			return nil
 		}
-		log.Printf("Warning: no rows updated for SQLite key: %s, trying fallback", key)
+		log.Warn().Str("key", key).Msg("No rows updated for SQLite key, trying fallback")
 	}
 
 	// Fallback: try all known token keys.
@@ -256,7 +257,7 @@ func saveCredentialsToSQLite(dbPath, key string, accessToken, refreshToken strin
 		}
 		rows, _ := result.RowsAffected()
 		if rows > 0 {
-			log.Printf("Credentials saved to SQLite key: %s (fallback)", fallbackKey)
+			log.Info().Str("key", fallbackKey).Msg("Credentials saved to SQLite (fallback)")
 			return nil
 		}
 	}

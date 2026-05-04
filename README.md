@@ -658,6 +658,11 @@ The current message is never affected — only history entries. Tools like `WebF
 ```env
 # Maximum characters for a single tool result in history (default: 150000 = ~150KB)
 MAX_TOOL_RESULT_CONTENT_LENGTH=150000
+
+# Maximum characters for the current message content (default: 180000 = ~180KB)
+# Protects against large single-message requests such as security monitors
+# sending full conversation transcripts as context.
+MAX_CURRENT_MESSAGE_LENGTH=180000
 ```
 
 ---

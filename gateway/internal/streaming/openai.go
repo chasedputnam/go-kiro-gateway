@@ -15,9 +15,10 @@ package streaming
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/parser"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/thinking"
@@ -147,7 +148,18 @@ func StreamToOpenAI(w http.ResponseWriter, events <-chan KiroEvent, opts OpenAIS
 			}
 
 		case EventTypeError:
-			log.Printf("Error during OpenAI streaming: %v", event.Error)
+			log.Error().Err(event.Error).Msg("Kiro API error during OpenAI streaming — sending clean stream termination")
+			// Inject a short error notice into the stream so the agent sees
+			// what happened, then terminate cleanly with finish_reason + [DONE].
+			errMsg := fmt.Sprintf("\n\n[Gateway error: %v]", event.Error)
+			writeOpenAIChunk(w, flusher, completionID, createdTime, opts.Model, map[string]any{"content": errMsg}, nil)
+			writeOpenAIFinalChunk(w, flusher, completionID, createdTime, opts.Model, "stop", map[string]any{
+				"prompt_tokens":     0,
+				"completion_tokens": tokenizer.CountTokens(fullContent + fullThinkingContent),
+				"total_tokens":      tokenizer.CountTokens(fullContent + fullThinkingContent),
+			})
+			fmt.Fprintf(w, "data: [DONE]\n\n")
+			flusher.Flush()
 			return nil
 
 		case EventTypeDone:
@@ -255,7 +267,7 @@ func writeOpenAIChunk(
 
 	data, err := json.Marshal(chunk)
 	if err != nil {
-		log.Printf("Failed to marshal OpenAI chunk: %v", err)
+		log.Error().Err(err).Msg("Failed to marshal OpenAI chunk")
 		return
 	}
 
@@ -290,7 +302,7 @@ func writeOpenAIFinalChunk(
 
 	data, err := json.Marshal(chunk)
 	if err != nil {
-		log.Printf("Failed to marshal OpenAI final chunk: %v", err)
+		log.Error().Err(err).Msg("Failed to marshal OpenAI final chunk")
 		return
 	}
 

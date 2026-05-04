@@ -9,11 +9,12 @@ package converter
 
 import (
 	"encoding/json"
-	"log"
+	"fmt"
 	"strings"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
+	"github.com/rs/zerolog/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -315,7 +316,7 @@ func extractOpenAIImageURL(block map[string]any) *UnifiedImage {
 		// Parse data URL: data:image/jpeg;base64,/9j/4AAQ...
 		parts := strings.SplitN(url, ",", 2)
 		if len(parts) != 2 || parts[1] == "" {
-			log.Printf("Failed to parse image data URL: missing data after comma")
+			log.Warn().Msg("Failed to parse image data URL: missing data after comma")
 			return nil
 		}
 		header := parts[0] // "data:image/jpeg;base64"
@@ -335,7 +336,7 @@ func extractOpenAIImageURL(block map[string]any) *UnifiedImage {
 	}
 
 	if strings.HasPrefix(url, "http") {
-		log.Printf("URL-based images are not supported by Kiro API, skipping: %.80s...", url)
+		log.Warn().Str("url", fmt.Sprintf("%.80s", url)).Msg("URL-based images are not supported by Kiro API, skipping")
 		return nil
 	}
 
@@ -368,7 +369,7 @@ func extractAnthropicImage(block map[string]any) *UnifiedImage {
 
 	case "url":
 		url := stringVal(source, "url")
-		log.Printf("URL-based images are not supported by Kiro API, skipping: %.80s...", url)
+		log.Warn().Str("url", fmt.Sprintf("%.80s", url)).Msg("URL-based images are not supported by Kiro API, skipping")
 		return nil
 	}
 
@@ -425,7 +426,7 @@ func convertOpenAITools(tools []models.Tool) []UnifiedTool {
 			continue
 		}
 
-		log.Printf("Skipping invalid tool: no function or name field found")
+		log.Warn().Msg("Skipping invalid tool: no function or name field found")
 	}
 
 	if len(out) == 0 {

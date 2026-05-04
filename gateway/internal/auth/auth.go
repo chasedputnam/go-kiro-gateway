@@ -18,13 +18,13 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/user"
 	"sync"
 	"time"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
+	"github.com/rs/zerolog/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -196,8 +196,7 @@ func NewAuthManager(cfg *config.Config) (AuthManager, error) {
 		m.profileARN = cfg.ProfileARN
 	}
 
-	log.Printf("Auth manager initialized: type=%s, region=%s, api_host=%s, q_host=%s, profileARN=%s",
-		m.authType, cfg.Region, m.apiHost, m.qHost, m.profileARN)
+	log.Info().Str("type", string(m.authType)).Str("region", cfg.Region).Str("api_host", m.apiHost).Str("q_host", m.qHost).Str("profile_arn", m.profileARN).Msg("Auth manager initialized")
 
 	return m, nil
 }
@@ -222,7 +221,7 @@ func (m *kiroAuthManager) GetAccessToken(ctx context.Context) (string, error) {
 		// Graceful degradation: if refresh fails but the token hasn't
 		// actually expired yet, return it anyway.
 		if m.accessToken != "" && time.Now().Before(m.expiresAt) {
-			log.Printf("Token refresh failed but existing token still valid, using it: %v", err)
+			log.Warn().Err(err).Msg("Token refresh failed but existing token still valid, using it")
 			return m.accessToken, nil
 		}
 		return "", fmt.Errorf("auth: token refresh failed: %w", err)
@@ -309,10 +308,10 @@ func (m *kiroAuthManager) loadCredentials() error {
 	// Priority 1: JSON credentials file.
 	if m.cfg.CredsFile != "" {
 		if err := m.loadFromCredsFile(m.cfg.CredsFile); err != nil {
-			log.Printf("Warning: failed to load credentials from file %s: %v", m.cfg.CredsFile, err)
+			log.Warn().Err(err).Str("file", m.cfg.CredsFile).Msg("Failed to load credentials from file")
 		} else {
 			m.credsFile = m.cfg.CredsFile
-			log.Printf("Credentials loaded from file: %s", m.cfg.CredsFile)
+			log.Info().Str("file", m.cfg.CredsFile).Msg("Credentials loaded from file")
 			return nil
 		}
 	}
@@ -320,17 +319,17 @@ func (m *kiroAuthManager) loadCredentials() error {
 	// Priority 2: REFRESH_TOKEN environment variable.
 	if m.cfg.RefreshToken != "" {
 		m.refreshToken = m.cfg.RefreshToken
-		log.Printf("Credentials loaded from REFRESH_TOKEN environment variable")
+		log.Info().Msg("Credentials loaded from REFRESH_TOKEN environment variable")
 		return nil
 	}
 
 	// Priority 3: SQLite database (kiro-cli).
 	if m.cfg.CLIDBFile != "" {
 		if err := m.loadFromSQLite(m.cfg.CLIDBFile); err != nil {
-			log.Printf("Warning: failed to load credentials from SQLite %s: %v", m.cfg.CLIDBFile, err)
+			log.Warn().Err(err).Str("db", m.cfg.CLIDBFile).Msg("Failed to load credentials from SQLite")
 		} else {
 			m.sqliteDB = m.cfg.CLIDBFile
-			log.Printf("Credentials loaded from SQLite database: %s", m.cfg.CLIDBFile)
+			log.Info().Str("db", m.cfg.CLIDBFile).Msg("Credentials loaded from SQLite database")
 			return nil
 		}
 	}
@@ -365,8 +364,7 @@ func (m *kiroAuthManager) loadFromCredsFile(path string) error {
 		m.apiHost = fmt.Sprintf(kiroAPIHostTemplate, creds.Region)
 		m.qHost = fmt.Sprintf(kiroQHostTemplate, creds.Region)
 		m.ssoRegion = creds.Region
-		log.Printf("Region updated from credentials file: region=%s, api_host=%s, q_host=%s, profileARN=%s",
-			creds.Region, m.apiHost, m.qHost, m.profileARN)
+		log.Info().Str("region", creds.Region).Str("api_host", m.apiHost).Str("q_host", m.qHost).Str("profile_arn", m.profileARN).Msg("Region updated from credentials file")
 	}
 
 	// Enterprise Kiro IDE: load device registration from
@@ -388,12 +386,11 @@ func (m *kiroAuthManager) loadFromCredsFile(path string) error {
 		m.expiresAt = parseTime(creds.ExpiresAt)
 	}
 
-	log.Printf("Auth state after credential load: authType=%s region=%s apiHost=%s qHost=%s profileARN=%s "+
-		"hasRefreshToken=%t hasAccessToken=%t hasClientID=%t hasClientSecret=%t "+
-		"expiresAt=%s fingerprint=%s credsFile=%s sqliteDB=%s",
-		m.authType, m.ssoRegion, m.apiHost, m.qHost, m.profileARN,
-		m.refreshToken != "", m.accessToken != "", m.clientID != "", m.clientSecret != "",
-		m.expiresAt.Format(time.RFC3339), m.fingerprint, m.credsFile, m.sqliteDB)
+	log.Debug().Str("auth_type", string(m.authType)).Str("region", m.ssoRegion).Str("api_host", m.apiHost).Str("q_host", m.qHost).Str("profile_arn", m.profileARN).
+		Bool("has_refresh_token", m.refreshToken != "").Bool("has_access_token", m.accessToken != "").
+		Bool("has_client_id", m.clientID != "").Bool("has_client_secret", m.clientSecret != "").
+		Str("expires_at", m.expiresAt.Format(time.RFC3339)).Str("fingerprint", m.fingerprint).
+		Str("creds_file", m.credsFile).Str("sqlite_db", m.sqliteDB).Msg("Auth state after credential load")
 
 	return nil
 }
@@ -404,20 +401,20 @@ func (m *kiroAuthManager) loadFromCredsFile(path string) error {
 func (m *kiroAuthManager) loadEnterpriseDeviceRegistration(clientIDHash string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		log.Printf("Warning: cannot determine home directory for enterprise device registration: %v", err)
+		log.Warn().Err(err).Msg("Cannot determine home directory for enterprise device registration")
 		return
 	}
 
 	path := fmt.Sprintf("%s/.aws/sso/cache/%s.json", home, clientIDHash)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		log.Printf("Warning: enterprise device registration file not found: %s", path)
+		log.Warn().Str("path", path).Msg("Enterprise device registration file not found")
 		return
 	}
 
 	var reg deviceRegistration
 	if err := json.Unmarshal(data, &reg); err != nil {
-		log.Printf("Warning: failed to parse enterprise device registration: %v", err)
+		log.Warn().Err(err).Str("path", path).Msg("Failed to parse enterprise device registration")
 		return
 	}
 
@@ -428,7 +425,7 @@ func (m *kiroAuthManager) loadEnterpriseDeviceRegistration(clientIDHash string) 
 		m.clientSecret = reg.ClientSecret
 	}
 
-	log.Printf("Enterprise device registration loaded from %s", path)
+	log.Info().Str("path", path).Msg("Enterprise device registration loaded")
 }
 
 // loadFromSQLite loads credentials from a kiro-cli SQLite database.
@@ -462,7 +459,7 @@ func (m *kiroAuthManager) loadFromSQLite(dbPath string) error {
 	// We do NOT update apiHost/qHost because the Kiro API is only in us-east-1.
 	if creds.Region != "" {
 		m.ssoRegion = creds.Region
-		log.Printf("SSO region from SQLite: %s (API stays at %s)", creds.Region, m.cfg.Region)
+		log.Info().Str("sso_region", creds.Region).Str("api_region", m.cfg.Region).Msg("SSO region from SQLite (API region unchanged)")
 	}
 
 	// Parse expiresAt timestamp.
@@ -485,10 +482,10 @@ func (m *kiroAuthManager) loadFromSQLite(dbPath string) error {
 func (m *kiroAuthManager) detectAuthType() {
 	if m.clientID != "" && m.clientSecret != "" {
 		m.authType = AuthTypeAWSSSO
-		log.Printf("Detected auth type: AWS SSO OIDC")
+		log.Info().Msg("Detected auth type: AWS SSO OIDC")
 	} else {
 		m.authType = AuthTypeKiroDesktop
-		log.Printf("Detected auth type: Kiro Desktop")
+		log.Info().Msg("Detected auth type: Kiro Desktop")
 	}
 }
 
@@ -534,6 +531,6 @@ func parseTime(s string) time.Time {
 	if t, err := time.Parse("2006-01-02T15:04:05", s); err == nil {
 		return t.UTC()
 	}
-	log.Printf("Warning: failed to parse expiresAt timestamp: %s", s)
+	log.Warn().Str("value", s).Msg("Failed to parse expiresAt timestamp")
 	return time.Time{}
 }

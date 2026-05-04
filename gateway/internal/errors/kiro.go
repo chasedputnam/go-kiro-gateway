@@ -2,7 +2,8 @@ package errors
 
 import (
 	"fmt"
-	"log"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -44,7 +45,7 @@ func EnhanceKiroError(errorJSON map[string]any) *KiroErrorInfo {
 	reason := stringFromMap(errorJSON, "reason", "UNKNOWN")
 
 	// Log the original error at DEBUG level for troubleshooting.
-	log.Printf("[DEBUG] Kiro API error — reason=%s message=%q", reason, originalMessage)
+	log.Debug().Str("reason", reason).Str("message", originalMessage).Msg("Kiro API error")
 
 	var userMessage string
 

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/rs/zerolog/log"
 )
 
 // Config holds all gateway settings. Fields are populated by Load().
@@ -69,6 +69,7 @@ type Config struct {
 	// Limits
 	ToolDescriptionMaxLength   int
 	MaxToolResultContentLength int
+	MaxCurrentMessageLength    int
 	ModelCacheTTL            time.Duration
 	DefaultMaxInputTokens    int
 	MaxRetries               int
@@ -109,7 +110,7 @@ func Load() (*Config, error) {
 
 	cfg.VPNProxyURL = envStr("VPN_PROXY_URL", "")
 
-	cfg.FirstTokenTimeout = time.Duration(envFloat("FIRST_TOKEN_TIMEOUT", 15)) * time.Second
+	cfg.FirstTokenTimeout = time.Duration(envFloat("FIRST_TOKEN_TIMEOUT", 30)) * time.Second
 	cfg.FirstTokenMaxRetries = envInt("FIRST_TOKEN_MAX_RETRIES", 3)
 	cfg.StreamingReadTimeout = time.Duration(envFloat("STREAMING_READ_TIMEOUT", 300)) * time.Second
 
@@ -139,6 +140,7 @@ func Load() (*Config, error) {
 
 	cfg.ToolDescriptionMaxLength = envInt("TOOL_DESCRIPTION_MAX_LENGTH", 10000)
 	cfg.MaxToolResultContentLength = envInt("MAX_TOOL_RESULT_CONTENT_LENGTH", 150000)
+	cfg.MaxCurrentMessageLength = envInt("MAX_CURRENT_MESSAGE_LENGTH", 180000)
 	cfg.ModelCacheTTL = time.Duration(envInt("MODEL_CACHE_TTL", 3600)) * time.Second
 	cfg.DefaultMaxInputTokens = envInt("DEFAULT_MAX_INPUT_TOKENS", 200000)
 	cfg.MaxRetries = envInt("MAX_RETRIES", 3)
@@ -216,18 +218,11 @@ func validate(cfg *Config) error {
 // ---------------------------------------------------------------------------
 
 func warnTimeoutConfig(firstToken, streamingRead time.Duration) {
-	log.Printf(
-		"\n⚠️  WARNING: Suboptimal timeout configuration detected.\n\n"+
-			"    FIRST_TOKEN_TIMEOUT (%.0fs) >= STREAMING_READ_TIMEOUT (%.0fs)\n\n"+
-			"    These timeouts serve different purposes:\n"+
-			"      - FIRST_TOKEN_TIMEOUT: time to wait for model to START responding (default: 15s)\n"+
-			"      - STREAMING_READ_TIMEOUT: time to wait BETWEEN chunks during streaming (default: 300s)\n\n"+
-			"    Recommendation: FIRST_TOKEN_TIMEOUT should be LESS than STREAMING_READ_TIMEOUT.\n\n"+
-			"    Example configuration:\n"+
-			"      FIRST_TOKEN_TIMEOUT=15\n"+
-			"      STREAMING_READ_TIMEOUT=300\n",
-		firstToken.Seconds(), streamingRead.Seconds(),
-	)
+	log.Warn().
+		Float64("first_token_timeout_s", firstToken.Seconds()).
+		Float64("streaming_read_timeout_s", streamingRead.Seconds()).
+		Msg("Suboptimal timeout configuration: FIRST_TOKEN_TIMEOUT >= STREAMING_READ_TIMEOUT. " +
+			"Recommendation: set FIRST_TOKEN_TIMEOUT=30 and STREAMING_READ_TIMEOUT=300")
 }
 
 // ---------------------------------------------------------------------------

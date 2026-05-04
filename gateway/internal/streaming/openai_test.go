@@ -389,12 +389,23 @@ func TestStreamToOpenAI_ErrorEventStopsStreaming(t *testing.T) {
 	StreamToOpenAI(rec, ch, defaultOpenAIOpts())
 
 	body := rec.Body.String()
-	// Should have partial content but no [DONE] since error stopped processing.
-	if strings.Contains(body, "[DONE]") {
-		t.Error("should not have [DONE] after error")
+	// On error, the stream must still be terminated cleanly with a final
+	// chunk (finish_reason=stop) and [DONE] so OpenAI SDK clients don't
+	// hang waiting for stream termination.
+	if !strings.Contains(body, "[DONE]") {
+		t.Error("expected [DONE] even after error — client needs clean stream termination")
+	}
+	// A short error notice must be injected into the stream so the agent
+	// knows the response was truncated due to a gateway error.
+	if !strings.Contains(body, "[Gateway error:") {
+		t.Error("expected gateway error notice in stream content")
 	}
 	if strings.Contains(body, "should not appear") {
 		t.Error("content after error should not appear")
+	}
+	// Verify the partial content before the error was sent.
+	if !strings.Contains(body, "partial") {
+		t.Error("partial content before error should have been sent")
 	}
 }
 

@@ -24,9 +24,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -115,8 +116,7 @@ func (r *awsSSORefresher) refresh(ctx context.Context, m *kiroAuthManager) (stri
 		return "", "", time.Time{}, fmt.Errorf("aws sso oidc refresh: marshal request: %w", err)
 	}
 
-	log.Printf("AWS SSO OIDC refresh request: url=%s, sso_region=%s, api_region=%s, client_id=%s...",
-		url, ssoRegion, m.cfg.Region, truncateForLog(m.clientID, 8))
+	log.Debug().Str("url", url).Str("sso_region", ssoRegion).Str("api_region", m.cfg.Region).Str("client_id_prefix", truncateForLog(m.clientID, 8)).Msg("AWS SSO OIDC refresh request")
 
 	// Build HTTP request with context for timeout/cancellation.
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
@@ -143,8 +143,7 @@ func (r *awsSSORefresher) refresh(ctx context.Context, m *kiroAuthManager) (stri
 		// Try to parse AWS error for more details.
 		var awsErr awsSSOErrorResponse
 		if jsonErr := json.Unmarshal(respBody, &awsErr); jsonErr == nil && awsErr.Error != "" {
-			log.Printf("AWS SSO OIDC error details: error=%s, description=%s",
-				awsErr.Error, awsErr.ErrorDescription)
+			log.Warn().Str("error", awsErr.Error).Str("description", awsErr.ErrorDescription).Msg("AWS SSO OIDC error details")
 		}
 		return "", "", time.Time{}, fmt.Errorf(
 			"aws sso oidc refresh: server returned HTTP %d: %s", resp.StatusCode, string(respBody))
@@ -169,7 +168,7 @@ func (r *awsSSORefresher) refresh(ctx context.Context, m *kiroAuthManager) (stri
 		time.Duration(expiresIn-60) * time.Second,
 	)
 
-	log.Printf("Token refreshed via AWS SSO OIDC, expires: %s", expiresAt.Format(time.RFC3339))
+	log.Info().Str("expires_at", expiresAt.Format(time.RFC3339)).Msg("Token refreshed via AWS SSO OIDC")
 
 	// Persist refreshed tokens back to the credential source.
 	saveRefreshedTokens(m, refreshResp.AccessToken, refreshResp.RefreshToken, expiresAt)

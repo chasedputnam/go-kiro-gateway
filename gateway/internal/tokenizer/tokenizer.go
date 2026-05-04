@@ -11,11 +11,11 @@ package tokenizer
 
 import (
 	"encoding/json"
-	"log"
 	"sync"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/converter"
 	tiktoken "github.com/pkoukk/tiktoken-go"
+	"github.com/rs/zerolog/log"
 )
 
 // ClaudeCorrectionFactor is the empirical multiplier applied to raw token
@@ -42,9 +42,9 @@ func getEncoding() *tiktoken.Tiktoken {
 	encOnce.Do(func() {
 		enc, encErr = tiktoken.GetEncoding(encodingName)
 		if encErr != nil {
-			log.Printf("[Tokenizer] Failed to initialise tiktoken (%s): %v", encodingName, encErr)
+			log.Error().Err(encErr).Str("encoding", encodingName).Msg("[Tokenizer] Failed to initialise tiktoken")
 		} else {
-			log.Printf("[Tokenizer] Initialised tiktoken with %s encoding", encodingName)
+			log.Info().Str("encoding", encodingName).Msg("[Tokenizer] Initialised tiktoken")
 		}
 	})
 	return enc
