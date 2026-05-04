@@ -58,7 +58,7 @@ Implementation plan based on the requirements and design documents.
   - Clarify that `docker-compose.yml` lives in `gateway/` and should be run from there
   - References: Requirement 9.1, 9.2, 9.3, 9.4
 
-- [ ] 9. Commit Docker, CI, and README changes and push to main
+- [x] 9. Commit Docker, CI, and README changes and push to main
   - Stage and commit the root `Dockerfile`, `release.yml`, and updated `README.md`
   - Push and confirm CI passes on main before tagging
   - References: Requirement 1.3, 3.3, 6.5
