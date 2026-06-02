@@ -31,6 +31,7 @@ func clearConfigEnvVars(t *testing.T) {
 		"TOOL_DESCRIPTION_MAX_LENGTH", "MODEL_CACHE_TTL",
 		"DEFAULT_MAX_INPUT_TOKENS", "MAX_RETRIES", "BASE_RETRY_DELAY",
 		"TOKEN_REFRESH_THRESHOLD",
+		"BACKEND_MODE", "KIRO_CLI_PATH", "ACP_AGENT",
 	}
 	for _, v := range vars {
 		t.Setenv(v, "")
@@ -886,6 +887,108 @@ func TestValidate_AllCredentialSources(t *testing.T) {
 				t.Errorf("validate() returned unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ACP backend configuration
+// ---------------------------------------------------------------------------
+
+func TestLoad_ACPMode_SkipsCredentialValidation(t *testing.T) {
+	clearConfigEnvVars(t)
+	// No credential source set — would fail in HTTP mode.
+	t.Setenv("BACKEND_MODE", "acp")
+
+	origArgs := os.Args
+	os.Args = []string{"gateway"}
+	defer func() { os.Args = origArgs }()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() in ACP mode should not require credentials, got: %v", err)
+	}
+	if cfg.BackendMode != "acp" {
+		t.Errorf("BackendMode = %q, want %q", cfg.BackendMode, "acp")
+	}
+}
+
+func TestLoad_HTTPMode_RequiresCredentials(t *testing.T) {
+	clearConfigEnvVars(t)
+	// Explicitly set HTTP mode, no credentials.
+	t.Setenv("BACKEND_MODE", "http")
+
+	origArgs := os.Args
+	os.Args = []string{"gateway"}
+	defer func() { os.Args = origArgs }()
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() in HTTP mode without credentials should return error")
+	}
+}
+
+func TestLoad_ACPMode_DefaultValues(t *testing.T) {
+	clearConfigEnvVars(t)
+	t.Setenv("BACKEND_MODE", "acp")
+	t.Setenv("KIRO_CLI_PATH", "/usr/local/bin/kiro-cli")
+	t.Setenv("ACP_AGENT", "my-agent")
+
+	origArgs := os.Args
+	os.Args = []string{"gateway"}
+	defer func() { os.Args = origArgs }()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if cfg.KiroCLIPath == "" {
+		t.Error("KiroCLIPath should be set")
+	}
+	if cfg.ACPAgent != "my-agent" {
+		t.Errorf("ACPAgent = %q, want %q", cfg.ACPAgent, "my-agent")
+	}
+}
+
+func TestLoad_BackendMode_DefaultIsHTTP(t *testing.T) {
+	clearConfigEnvVars(t)
+	setCredentialSource(t)
+
+	origArgs := os.Args
+	os.Args = []string{"gateway"}
+	defer func() { os.Args = origArgs }()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if cfg.BackendMode != "http" {
+		t.Errorf("BackendMode = %q, want %q (default)", cfg.BackendMode, "http")
+	}
+}
+
+func TestLoad_BackendMode_InvalidRejected(t *testing.T) {
+	clearConfigEnvVars(t)
+	setCredentialSource(t)
+	t.Setenv("BACKEND_MODE", "grpc") // invalid
+
+	origArgs := os.Args
+	os.Args = []string{"gateway"}
+	defer func() { os.Args = origArgs }()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	// Invalid enum value falls back to default.
+	if cfg.BackendMode != "http" {
+		t.Errorf("BackendMode = %q, want %q (default for invalid value)", cfg.BackendMode, "http")
+	}
+}
+
+func TestValidate_ACPMode_NoCredsRequired(t *testing.T) {
+	cfg := &Config{BackendMode: "acp"}
+	if err := validate(cfg); err != nil {
+		t.Errorf("validate() in ACP mode should not require credentials, got: %v", err)
 	}
 }
 

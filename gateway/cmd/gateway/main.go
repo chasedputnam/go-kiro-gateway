@@ -19,6 +19,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/auth"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/backend"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/cache"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/client"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
@@ -95,8 +96,22 @@ func run() error {
 	// 8. Initialize truncation state.
 	truncState := truncation.NewState()
 
-	// 9. Create server with all dependencies.
-	srv := server.New(cfg, authMgr, modelCache, modelResolver, kiroClient, debugLogger, truncState)
+	// 9. Select and initialize backend.
+	var b backend.Backend
+	if cfg.BackendMode == "acp" {
+		acpBackend, err := backend.NewACPBackend(cfg)
+		if err != nil {
+			return fmt.Errorf("acp backend: %w", err)
+		}
+		b = acpBackend
+	} else {
+		b = backend.NewHTTPBackend(kiroClient)
+		log.Info().Msg("Backend: HTTP (Kiro API)")
+	}
+	defer b.Close()
+
+	// 10. Create server with all dependencies.
+	srv := server.New(cfg, authMgr, modelCache, modelResolver, b, debugLogger, truncState)
 
 	// 10. Print startup banner.
 	printBanner(cfg)

@@ -4,19 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	backendpkg "github.com/chasedputnam/go-kiro-gateway/gateway/internal/backend"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/cache"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/debug"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/resolver"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/server"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/streaming"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/truncation"
 )
 
@@ -24,23 +26,29 @@ import (
 // Mock HTTP client that returns a canned response
 // ---------------------------------------------------------------------------
 
-// mockStreamingClient returns a configurable mock response for testing.
+// mockStreamingClient is a mock backend for testing route handlers.
+// statusCode != 200 or err != nil causes Complete() to return an error.
+// statusCode == 200 returns an empty (closed) event channel.
+// This type is defined here and shared with routes_anthropic_test.go
+// (both files are in the same server_test package).
 type mockStreamingClient struct {
 	statusCode int
 	body       string
 	err        error
 }
 
-func (m *mockStreamingClient) RequestWithRetry(_ context.Context, _, _ string, _ any, _ bool) (*http.Response, error) {
+func (m *mockStreamingClient) Complete(_ context.Context, _ *backendpkg.Request) (<-chan streaming.KiroEvent, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &http.Response{
-		StatusCode: m.statusCode,
-		Body:       io.NopCloser(strings.NewReader(m.body)),
-		Header:     make(http.Header),
-	}, nil
+	if m.statusCode != 0 && m.statusCode != http.StatusOK {
+		return nil, &backendpkg.HTTPError{StatusCode: m.statusCode, Body: m.body}
+	}
+	ch := make(chan streaming.KiroEvent)
+	close(ch)
+	return ch, nil
 }
+func (m *mockStreamingClient) Close() error { return nil }
 
 // ---------------------------------------------------------------------------
 // Test helper — creates a server with configurable mock client
@@ -386,8 +394,7 @@ func TestChatCompletions_Streaming_KiroError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// POST /v1/chat/completions — model resolution tests
-// ---------------------------------------------------------------------------
+// POST /v1/chat/completions — model resolution
 
 func TestChatCompletions_ModelResolution(t *testing.T) {
 	// Use a model name that needs normalization.
@@ -481,7 +488,7 @@ func TestChatCompletions_TruncationRecovery_ToolResult(t *testing.T) {
 
 func TestChatCompletions_ClientError(t *testing.T) {
 	client := &mockStreamingClient{
-		err: io.ErrUnexpectedEOF,
+		err: fmt.Errorf("unexpected EOF"),
 	}
 	srv := newTestServerWithClient(t, client)
 

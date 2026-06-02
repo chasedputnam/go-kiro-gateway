@@ -3,7 +3,7 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
-	"io"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -320,9 +320,6 @@ func TestMessages_Streaming_KiroError(t *testing.T) {
 		t.Fatalf("expected 500, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ---------------------------------------------------------------------------
-// POST /v1/messages — model resolution tests
 // ---------------------------------------------------------------------------
 
 func TestMessages_ModelResolution(t *testing.T) {
@@ -417,7 +414,7 @@ func TestMessages_TruncationRecovery_ToolResult(t *testing.T) {
 
 func TestMessages_ClientError(t *testing.T) {
 	client := &mockStreamingClient{
-		err: io.ErrUnexpectedEOF,
+		err: errors.New("unexpected EOF"),
 	}
 	srv := newTestServerWithClient(t, client)
 

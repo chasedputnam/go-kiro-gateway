@@ -8,12 +8,14 @@ import (
 	"time"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/auth"
+	backendpkg "github.com/chasedputnam/go-kiro-gateway/gateway/internal/backend"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/cache"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/debug"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/resolver"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/server"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/streaming"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/truncation"
 )
 
@@ -48,11 +50,15 @@ var _ auth.AuthManager = (*mockAuthManager)(nil)
 // Mock KiroClient for tests
 // ---------------------------------------------------------------------------
 
+// mockKiroClient is a no-op backend for main_test.go.
 type mockKiroClient struct{}
 
-func (m *mockKiroClient) RequestWithRetry(_ context.Context, _, _ string, _ any, _ bool) (*http.Response, error) {
-	return &http.Response{StatusCode: http.StatusOK}, nil
+func (m *mockKiroClient) Complete(_ context.Context, _ *backendpkg.Request) (<-chan streaming.KiroEvent, error) {
+	ch := make(chan streaming.KiroEvent)
+	close(ch)
+	return ch, nil
 }
+func (m *mockKiroClient) Close() error { return nil }
 
 // ---------------------------------------------------------------------------
 // Test helpers

@@ -9,7 +9,7 @@
 
 *Use Claude models from Kiro with Claude Code, OpenCode, Codex app, Cursor, Cline, Roo Code, Kilo Code, Obsidian, OpenAI SDK, LangChain, and any other OpenAI or Anthropic compatible tools and services.*
 
-[Models](#-supported-models) • [Features](#-features) • [Quick Start](#-quick-start) • [Configuration](#-configuration)
+[Models](#-supported-models) • [Features](#-features) • [Quick Start](#-quick-start) • [Configuration](#-configuration) • [ACP Mode](#-acp-mode-kiro-cli-backend)
 
 ---
 
@@ -34,6 +34,7 @@
 
 | Feature | Description |
 |---------|-------------|
+| **ACP backend (kiro-cli)** | Route requests through a local `kiro-cli` process — no API credentials needed |
 | **OpenAI-compatible API** | Works with any OpenAI-compatible tool |
 | **Anthropic-compatible API** | Native `/v1/messages` endpoint |
 | **VPN/Proxy Support** | HTTP/SOCKS5 proxy for restricted networks |
@@ -268,6 +269,62 @@ If you need to manually extract the refresh token (e.g., for debugging), you can
 - Look for requests to: `prod.us-east-1.auth.desktop.kiro.dev/refreshToken`
 
 </details>
+
+---
+
+## 🔌 ACP Mode (kiro-cli backend)
+
+By default the gateway calls the Kiro HTTP API directly and requires one of the credential sources above. **ACP mode** is an alternative backend that spawns a locally installed `kiro-cli` process and communicates with it over the [Agent Control Protocol](https://kiro.dev/docs/cli/acp/) (JSON-RPC 2.0 over stdio).
+
+This means:
+- No `KIRO_CREDS_FILE`, `REFRESH_TOKEN`, or `KIRO_CLI_DB_FILE` required
+- Auth is handled entirely by the kiro-cli session (just `kiro-cli login` once)
+- All the same OpenAI and Anthropic endpoints work unchanged
+
+### Prerequisites
+
+1. Install kiro-cli from [kiro.dev/downloads](https://kiro.dev/downloads/)
+2. Sign in: `kiro-cli login`
+3. Verify it works: `kiro-cli whoami`
+
+### Configuration
+
+Add to your `.env` file (or set as environment variables):
+
+```env
+# Switch to ACP backend
+BACKEND_MODE=acp
+
+# Optional: explicit path to kiro-cli if it is not on your PATH
+# KIRO_CLI_PATH="~/.local/bin/kiro-cli"
+
+# Optional: pass a specific --agent name to kiro-cli acp
+# ACP_AGENT=""
+
+# Still required: protect your gateway with a password
+PROXY_API_KEY="my-super-secret-password-123"
+```
+
+Credential fields (`KIRO_CREDS_FILE`, `REFRESH_TOKEN`, `KIRO_CLI_DB_FILE`, `PROFILE_ARN`) are all optional and ignored in ACP mode.
+
+### How it works
+
+When `BACKEND_MODE=acp` the gateway:
+1. Locates `kiro-cli` (via `KIRO_CLI_PATH` or your system `PATH`)
+2. Spawns `kiro-cli acp` as a subprocess at startup
+3. Performs the ACP `initialize` handshake
+4. For each incoming chat completion request, creates a new ACP session (`session/new`), sets the requested model (`session/set_model`), sends the prompt (`session/prompt`), and streams `AgentMessageChunk` notifications back to the client as SSE
+5. Terminates the subprocess on graceful shutdown
+
+### Choosing between HTTP and ACP mode
+
+| | HTTP mode (default) | ACP mode |
+|---|---|---|
+| **Credential setup** | Required (token, file, or SQLite) | Not required |
+| **Auth management** | Gateway refreshes tokens automatically | Managed by kiro-cli |
+| **kiro-cli required** | No | Yes |
+| **Retry logic** | Full (403 refresh, 429 backoff, 5xx backoff) | Basic (session-level) |
+| **Model listing** | From Kiro API at startup | Same (cached from startup) |
 
 ---
 

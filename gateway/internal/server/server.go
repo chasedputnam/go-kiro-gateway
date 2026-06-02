@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/auth"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/backend"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/cache"
-	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/client"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/debug"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/middleware"
@@ -28,7 +28,7 @@ type Server struct {
 	auth        auth.AuthManager
 	cache       cache.ModelCache
 	resolver    resolver.Resolver
-	httpClient  client.KiroClient
+	backend     backend.Backend
 	debugLogger debug.DebugLogger
 	truncState  *truncation.State
 
@@ -44,7 +44,7 @@ func New(
 	authMgr auth.AuthManager,
 	modelCache cache.ModelCache,
 	modelResolver resolver.Resolver,
-	kiroClient client.KiroClient,
+	b backend.Backend,
 	debugLogger debug.DebugLogger,
 	truncState *truncation.State,
 ) *Server {
@@ -53,7 +53,7 @@ func New(
 		auth:        authMgr,
 		cache:       modelCache,
 		resolver:    modelResolver,
-		httpClient:  kiroClient,
+		backend:     b,
 		debugLogger: debugLogger,
 		truncState:  truncState,
 	}

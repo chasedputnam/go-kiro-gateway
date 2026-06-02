@@ -76,6 +76,11 @@ type Config struct {
 	BaseRetryDelay           time.Duration
 	TokenRefreshThreshold    time.Duration
 
+	// ACP backend
+	BackendMode string
+	KiroCLIPath string
+	ACPAgent    string
+
 	// App
 	Version     string
 	Title       string
@@ -107,6 +112,10 @@ func Load() (*Config, error) {
 	cfg.Region = envStr("KIRO_REGION", "us-east-1")
 	cfg.CredsFile = normalizePath(envStr("KIRO_CREDS_FILE", ""))
 	cfg.CLIDBFile = normalizePath(envStr("KIRO_CLI_DB_FILE", ""))
+
+	cfg.BackendMode = envEnum("BACKEND_MODE", "http", []string{"http", "acp"})
+	cfg.KiroCLIPath = normalizePath(envStr("KIRO_CLI_PATH", ""))
+	cfg.ACPAgent = envStr("ACP_AGENT", "")
 
 	cfg.VPNProxyURL = envStr("VPN_PROXY_URL", "")
 
@@ -197,7 +206,12 @@ func applyCLIFlags(cfg *Config) {
 // ---------------------------------------------------------------------------
 
 // validate checks that the configuration has at least one credential source.
+// In ACP mode, credential fields are optional since the CLI manages auth.
 func validate(cfg *Config) error {
+	if cfg.BackendMode == "acp" {
+		return nil
+	}
+
 	hasCredsFile := cfg.CredsFile != ""
 	hasRefreshToken := cfg.RefreshToken != ""
 	hasCLIDB := cfg.CLIDBFile != ""
