@@ -1,6 +1,6 @@
 # Go Kiro Gateway
 
-**An API gateway proxy for Kiro API (Amazon Q Developer / AWS CodeWhisperer)**
+**An API gateway proxy for the AWS Kiro Service (Amazon Q Developer / AWS CodeWhisperer)**
 
 [![Release](https://img.shields.io/github/v/release/chasedputnam/go-kiro-gateway)](https://github.com/chasedputnam/go-kiro-gateway/releases/latest)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
@@ -10,6 +10,18 @@
 *Use Claude models from Kiro with Claude Code, OpenCode, Codex app, Cursor, Cline, Roo Code, Kilo Code, Obsidian, OpenAI SDK, LangChain, and any other OpenAI or Anthropic compatible tools and services.*
 
 [Models](#-supported-models) • [Features](#-features) • [Quick Start](#-quick-start) • [Configuration](#-configuration) • [ACP Mode](#-acp-mode-kiro-cli-backend)
+
+## Kiro Connectivity Options
+
+- **HTTP API** - Uses your Kiro login credentials to make direct API calls to the Kiro service. - `(Default method)`
+
+- **Agent Control Protocol (ACP)** - Uses a local Kiro CLI installation to run an instance of the CLI and communicate with the Kiro service via ACP. (ACP is the same protocol that IDE integrations within JetBrains IDEs, Zed, and other IDEs officially use to integrate with Kiro.)
+
+---
+
+## ⚠️ Disclaimer
+
+This project is not affiliated with, endorsed by, or sponsored by Amazon Web Services (AWS), Anthropic, or Kiro. Use at your own risk and in compliance with the terms of service of the underlying APIs.
 
 ---
 
@@ -823,9 +835,3 @@ See the [LICENSE](LICENSE) file for the full license text.
 ### Why AGPL-3.0?
 
 AGPL-3.0 ensures that improvements to this software benefit the entire community. If you modify this code base and deploy it as a service, you must share your improvements with your end users.
-
----
-
-## ⚠️ Disclaimer
-
-This project is not affiliated with, endorsed by, or sponsored by Amazon Web Services (AWS), Anthropic, or Kiro IDE. Use at your own risk and in compliance with the terms of service of the underlying APIs.
