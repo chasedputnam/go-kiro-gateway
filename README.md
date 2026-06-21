@@ -820,6 +820,35 @@ When enabled, requests are logged to the `debug_logs/` folder:
 
 ---
 
+## Troubleshooting
+
+### OIDC Token Refresh Failed (Invalid Grant)
+
+If you see this error:
+
+```
+error="failed to get access token: auth: token refresh failed: aws sso oidc refresh: server returned HTTP 400: {\"error\":\"invalid_grant\",\"error_description\":\"Invalid refresh token provided\"}"
+```
+
+**Cause:** AWS or your organization has reset the OIDC login session. This can happen when:
+- Your organization rotates SSO credentials
+- AWS invalidates the refresh token due to security policies
+- The token has been revoked or expired beyond the refresh window
+
+**Solution:** Log in again using the Kiro IDE or Kiro CLI to generate fresh OIDC tokens:
+
+```bash
+# For Kiro CLI users
+kiro-cli login
+
+# For Kiro IDE users
+# Simply open Kiro IDE and sign in again
+```
+
+Once logged in successfully, go-kiro-gateway will be able to connect and refresh OIDC tokens automatically.
+
+---
+
 ## 📜 License
 
 This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
