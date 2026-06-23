@@ -35,7 +35,7 @@ RUN CGO_ENABLED=0 GOOS=linux \
 # ---------------------------------------------------------------------------
 # Runtime stage
 # ---------------------------------------------------------------------------
-FROM alpine:3.23
+FROM alpine:3.24
 
 # Install CA certificates and curl for health checks.
 RUN apk add --no-cache ca-certificates curl
