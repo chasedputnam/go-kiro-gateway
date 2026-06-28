@@ -24,6 +24,7 @@ import (
 	gwerrors "github.com/chasedputnam/go-kiro-gateway/gateway/internal/errors"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/streaming"
+	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/tokenizer"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/truncation"
 )
 
@@ -116,8 +117,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	profileARN = s.auth.ProfileARN()
 	//}
 
-	// Convert to Kiro payload.
-	payloadResult, err := converter.BuildOpenAIKiroPayload(req, conversationID, profileARN, modelID, s.config)
+	// Convert to unified format, then build Kiro payload.
+	converted, err := converter.ConvertOpenAIRequest(req, s.config)
 	if err != nil {
 		log.Error().Err(err).Msg("Conversion error")
 		w.Header().Set("Content-Type", "application/json")
@@ -126,6 +127,29 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		s.debugLogger.FlushOnError(http.StatusBadRequest, err.Error())
 		return
 	}
+
+	payloadResult, err := converter.BuildKiroPayload(converter.BuildKiroPayloadOptions{
+		Messages:       converted.Messages,
+		SystemPrompt:   converted.SystemPrompt,
+		ModelID:        modelID,
+		Tools:          converted.Tools,
+		ConversationID: conversationID,
+		ProfileARN:     profileARN,
+		InjectThinking: true,
+		Cfg:            s.config,
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("Payload build error")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(gwerrors.OpenAIErrorResponse(err.Error(), "invalid_request_error", "conversion_error"))
+		s.debugLogger.FlushOnError(http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Estimate input tokens from request messages, tools, and system prompt.
+	inputTokens := tokenizer.EstimatePromptTokensFromMessages(converted.Messages, converted.Tools) +
+		tokenizer.CountTokens(converted.SystemPrompt)
 
 	// Log the Kiro request body for debug.
 	if kiroBody, err := json.Marshal(payloadResult.Payload); err == nil {
@@ -142,9 +166,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	streamOpts := streaming.DefaultStreamOptions(s.config)
 
 	if req.Stream {
-		s.handleOpenAIStreaming(w, r, payloadResult.Payload, kiroURL, req.Model, maxInputTokens, streamOpts, start)
+		s.handleOpenAIStreaming(w, r, payloadResult.Payload, kiroURL, req.Model, maxInputTokens, inputTokens, streamOpts, start)
 	} else {
-		s.handleOpenAINonStreaming(w, r, payloadResult.Payload, kiroURL, req.Model, maxInputTokens, streamOpts, start)
+		s.handleOpenAINonStreaming(w, r, payloadResult.Payload, kiroURL, req.Model, maxInputTokens, inputTokens, streamOpts, start)
 	}
 }
 
@@ -156,6 +180,7 @@ func (s *Server) handleOpenAIStreaming(
 	kiroURL string,
 	model string,
 	maxInputTokens int,
+	inputTokens int,
 	streamOpts streaming.StreamOptions,
 	start time.Time,
 ) {
@@ -193,6 +218,7 @@ func (s *Server) handleOpenAIStreaming(
 		Model:                model,
 		ThinkingHandlingMode: streamOpts.ThinkingHandlingMode,
 		MaxInputTokens:       maxInputTokens,
+		InputTokens:          inputTokens,
 	}
 
 	truncatedCalls := streaming.StreamToOpenAI(w, events, openAIOpts)
@@ -225,6 +251,7 @@ func (s *Server) handleOpenAINonStreaming(
 	kiroURL string,
 	model string,
 	maxInputTokens int,
+	inputTokens int,
 	streamOpts streaming.StreamOptions,
 	start time.Time,
 ) {
@@ -263,6 +290,7 @@ func (s *Server) handleOpenAINonStreaming(
 		Model:                model,
 		ThinkingHandlingMode: streamOpts.ThinkingHandlingMode,
 		MaxInputTokens:       maxInputTokens,
+		InputTokens:          inputTokens,
 	})
 
 	if s.config.TruncationRecovery {

@@ -116,6 +116,9 @@ type OpenAINonStreamOptions struct {
 
 	// MaxInputTokens is the model's max input token limit.
 	MaxInputTokens int
+
+	// InputTokens is the pre-calculated input token count.
+	InputTokens int
 }
 
 // BuildOpenAIResponse constructs a complete OpenAI chat.completion JSON
@@ -163,8 +166,8 @@ func BuildOpenAIResponse(resp *CollectedResponse, opts OpenAINonStreamOptions) m
 
 	// Calculate token usage.
 	completionTokens := tokenizer.CountTokens(resp.Content + resp.ThinkingContent)
-	promptTokens := 0
-	totalTokens := completionTokens
+	promptTokens := opts.InputTokens
+	totalTokens := promptTokens + completionTokens
 
 	if resp.ContextUsagePercentage > 0 && opts.MaxInputTokens > 0 {
 		promptTokens = tokenizer.CalculatePromptTokens(completionTokens, resp.ContextUsagePercentage/100, opts.MaxInputTokens)

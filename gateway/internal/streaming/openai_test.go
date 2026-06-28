@@ -468,3 +468,76 @@ func TestGenerateToolCallID(t *testing.T) {
 		t.Errorf("tool call ID should start with call_, got %q", id)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: StreamToOpenAI — InputTokens fallback
+// ---------------------------------------------------------------------------
+
+func TestStreamToOpenAI_InputTokensFallbackWithoutContextUsage(t *testing.T) {
+	// No contextUsagePercentage event — should fall back to InputTokens estimate.
+	events := feedEvents(
+		KiroEvent{Type: EventTypeContent, Content: "Hi"},
+		KiroEvent{Type: EventTypeDone},
+	)
+
+	opts := OpenAIStreamOptions{
+		Model:                "claude-sonnet-4",
+		ThinkingHandlingMode: thinking.AsReasoningContent,
+		MaxInputTokens:       200000,
+		InputTokens:          8000,
+	}
+
+	rec := httptest.NewRecorder()
+	StreamToOpenAI(rec, events, opts)
+
+	chunks, _ := parseSSEChunks(rec.Body.String())
+	lastChunk := chunks[len(chunks)-1]
+
+	usage, ok := lastChunk["usage"].(map[string]any)
+	if !ok {
+		t.Fatal("final chunk should have usage")
+	}
+
+	promptTokens := int(usage["prompt_tokens"].(float64))
+	if promptTokens != 8000 {
+		t.Errorf("prompt_tokens = %d, want 8000 (the fallback estimate)", promptTokens)
+	}
+
+	totalTokens := int(usage["total_tokens"].(float64))
+	completionTokens := int(usage["completion_tokens"].(float64))
+	if totalTokens != promptTokens+completionTokens {
+		t.Errorf("total_tokens = %d, want %d (prompt + completion)", totalTokens, promptTokens+completionTokens)
+	}
+}
+
+func TestStreamToOpenAI_ContextUsageOverridesInputTokens(t *testing.T) {
+	events := feedEvents(
+		KiroEvent{Type: EventTypeContent, Content: "Hello world"},
+		KiroEvent{Type: EventTypeContent, ContextUsagePercentage: 30.0},
+		KiroEvent{Type: EventTypeDone},
+	)
+
+	opts := OpenAIStreamOptions{
+		Model:                "claude-sonnet-4",
+		ThinkingHandlingMode: thinking.AsReasoningContent,
+		MaxInputTokens:       200000,
+		InputTokens:          100,
+	}
+
+	rec := httptest.NewRecorder()
+	StreamToOpenAI(rec, events, opts)
+
+	chunks, _ := parseSSEChunks(rec.Body.String())
+	lastChunk := chunks[len(chunks)-1]
+
+	usage := lastChunk["usage"].(map[string]any)
+	promptTokens := int(usage["prompt_tokens"].(float64))
+
+	// With 30% of 200k, prompt_tokens should be much higher than 100 (the fallback).
+	if promptTokens == 100 {
+		t.Errorf("prompt_tokens should be refined from contextUsagePercentage, not the fallback estimate")
+	}
+	if promptTokens <= 0 {
+		t.Errorf("prompt_tokens should be > 0, got %d", promptTokens)
+	}
+}

@@ -359,6 +359,7 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 			"stop_sequence": nil,
 		},
 		"usage": map[string]any{
+			"input_tokens":  inputTokens,
 			"output_tokens": outputTokens,
 		},
 	})

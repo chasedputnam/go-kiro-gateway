@@ -474,3 +474,135 @@ func TestStreamToAnthropic_ErrorEventSendsMessageStop(t *testing.T) {
 		t.Error("partial content before error should have been sent")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: StreamToAnthropic — input_tokens in message_delta
+// ---------------------------------------------------------------------------
+
+func TestStreamToAnthropic_MessageDeltaIncludesInputTokens(t *testing.T) {
+	events := feedEvents(
+		KiroEvent{Type: EventTypeContent, Content: "Hello"},
+		KiroEvent{Type: EventTypeDone},
+	)
+
+	rec := httptest.NewRecorder()
+	StreamToAnthropic(rec, events, defaultAnthropicOpts())
+
+	sseEvents := parseAnthropicSSE(rec.Body.String())
+
+	// Find message_delta event.
+	var msgDelta map[string]any
+	for _, e := range sseEvents {
+		if e.EventType == "message_delta" {
+			msgDelta = e.Data
+			break
+		}
+	}
+	if msgDelta == nil {
+		t.Fatal("expected message_delta event")
+	}
+
+	usage, ok := msgDelta["usage"].(map[string]any)
+	if !ok {
+		t.Fatal("message_delta should have usage")
+	}
+
+	if _, ok := usage["input_tokens"]; !ok {
+		t.Error("message_delta usage should include input_tokens")
+	}
+
+	inputTokens := int(usage["input_tokens"].(float64))
+	if inputTokens <= 0 {
+		t.Errorf("input_tokens in message_delta should be > 0, got %d", inputTokens)
+	}
+}
+
+func TestStreamToAnthropic_ContextUsageRefinesInputTokens(t *testing.T) {
+	events := feedEvents(
+		KiroEvent{Type: EventTypeContent, Content: "Hello"},
+		KiroEvent{Type: EventTypeContent, ContextUsagePercentage: 25.0},
+		KiroEvent{Type: EventTypeDone},
+	)
+
+	opts := AnthropicStreamOptions{
+		Model:                "claude-sonnet-4",
+		ThinkingHandlingMode: thinking.AsReasoningContent,
+		MaxInputTokens:       200000,
+		InputTokens:          100,
+	}
+
+	rec := httptest.NewRecorder()
+	StreamToAnthropic(rec, events, opts)
+
+	sseEvents := parseAnthropicSSE(rec.Body.String())
+
+	// message_start should have the initial estimate.
+	var msgStart map[string]any
+	for _, e := range sseEvents {
+		if e.EventType == "message_start" {
+			msgStart = e.Data
+			break
+		}
+	}
+	msg := msgStart["message"].(map[string]any)
+	startUsage := msg["usage"].(map[string]any)
+	startInput := int(startUsage["input_tokens"].(float64))
+	if startInput != 100 {
+		t.Errorf("message_start input_tokens = %d, want 100 (the estimate)", startInput)
+	}
+
+	// message_delta should have the refined value from contextUsagePercentage.
+	var msgDelta map[string]any
+	for _, e := range sseEvents {
+		if e.EventType == "message_delta" {
+			msgDelta = e.Data
+			break
+		}
+	}
+	deltaUsage := msgDelta["usage"].(map[string]any)
+	deltaInput := int(deltaUsage["input_tokens"].(float64))
+
+	// Refined value should be different from the estimate (100) since
+	// contextUsagePercentage of 25% on 200k window gives ~50000 - outputTokens.
+	if deltaInput == 100 {
+		t.Errorf("message_delta input_tokens should be refined from contextUsagePercentage, not the estimate")
+	}
+	if deltaInput <= 0 {
+		t.Errorf("message_delta input_tokens should be > 0, got %d", deltaInput)
+	}
+}
+
+func TestStreamToAnthropic_InputTokensFallbackWithoutContextUsage(t *testing.T) {
+	// No contextUsagePercentage event — should fall back to InputTokens estimate.
+	events := feedEvents(
+		KiroEvent{Type: EventTypeContent, Content: "Hi"},
+		KiroEvent{Type: EventTypeDone},
+	)
+
+	opts := AnthropicStreamOptions{
+		Model:                "claude-sonnet-4",
+		ThinkingHandlingMode: thinking.AsReasoningContent,
+		MaxInputTokens:       200000,
+		InputTokens:          5000,
+	}
+
+	rec := httptest.NewRecorder()
+	StreamToAnthropic(rec, events, opts)
+
+	sseEvents := parseAnthropicSSE(rec.Body.String())
+
+	var msgDelta map[string]any
+	for _, e := range sseEvents {
+		if e.EventType == "message_delta" {
+			msgDelta = e.Data
+			break
+		}
+	}
+	deltaUsage := msgDelta["usage"].(map[string]any)
+	deltaInput := int(deltaUsage["input_tokens"].(float64))
+
+	// Without contextUsagePercentage, should use the InputTokens fallback.
+	if deltaInput != 5000 {
+		t.Errorf("message_delta input_tokens = %d, want 5000 (the fallback estimate)", deltaInput)
+	}
+}

@@ -641,3 +641,76 @@ func TestRoundTrip_CollectThenBuildAnthropic(t *testing.T) {
 		t.Errorf("expected 3 content blocks, got %d", len(content))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: BuildOpenAIResponse — InputTokens fallback
+// ---------------------------------------------------------------------------
+
+func TestBuildOpenAIResponse_InputTokensFallbackWithoutContextUsage(t *testing.T) {
+	resp := &CollectedResponse{
+		Content: "Hello",
+		// No ContextUsagePercentage — should use InputTokens fallback.
+	}
+
+	result := BuildOpenAIResponse(resp, OpenAINonStreamOptions{
+		Model:          "claude-sonnet-4",
+		MaxInputTokens: 200000,
+		InputTokens:    12000,
+	})
+
+	usage := result["usage"].(map[string]any)
+	promptTokens := usage["prompt_tokens"].(int)
+	completionTokens := usage["completion_tokens"].(int)
+	totalTokens := usage["total_tokens"].(int)
+
+	if promptTokens != 12000 {
+		t.Errorf("prompt_tokens = %d, want 12000 (the fallback estimate)", promptTokens)
+	}
+	if totalTokens != promptTokens+completionTokens {
+		t.Errorf("total_tokens = %d, want %d", totalTokens, promptTokens+completionTokens)
+	}
+}
+
+func TestBuildAnthropicResponse_InputTokensFallbackWithoutContextUsage(t *testing.T) {
+	resp := &CollectedResponse{
+		Content: "Hello",
+		// No ContextUsagePercentage — should use InputTokens fallback.
+	}
+
+	result := BuildAnthropicResponse(resp, AnthropicNonStreamOptions{
+		Model:          "claude-sonnet-4",
+		MaxInputTokens: 200000,
+		InputTokens:    9500,
+	})
+
+	usage := result["usage"].(map[string]any)
+	inputTokens := usage["input_tokens"].(int)
+
+	if inputTokens != 9500 {
+		t.Errorf("input_tokens = %d, want 9500 (the fallback estimate)", inputTokens)
+	}
+}
+
+func TestBuildOpenAIResponse_ContextUsageOverridesInputTokens(t *testing.T) {
+	resp := &CollectedResponse{
+		Content:                "Hello",
+		ContextUsagePercentage: 40.0,
+	}
+
+	result := BuildOpenAIResponse(resp, OpenAINonStreamOptions{
+		Model:          "claude-sonnet-4",
+		MaxInputTokens: 200000,
+		InputTokens:    100,
+	})
+
+	usage := result["usage"].(map[string]any)
+	promptTokens := usage["prompt_tokens"].(int)
+
+	// With 40% of 200k, prompt_tokens should be much higher than 100.
+	if promptTokens == 100 {
+		t.Errorf("prompt_tokens should be refined from ContextUsagePercentage, not the fallback")
+	}
+	if promptTokens <= 0 {
+		t.Errorf("prompt_tokens should be > 0, got %d", promptTokens)
+	}
+}

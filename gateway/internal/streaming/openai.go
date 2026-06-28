@@ -42,6 +42,9 @@ type OpenAIStreamOptions struct {
 	// prompt token calculation from context usage percentage.
 	MaxInputTokens int
 
+	// InputTokens is the pre-calculated input token count from the request.
+	InputTokens int
+
 	// RequestMessages are the original request messages for fallback
 	// prompt token estimation when context usage percentage is unavailable.
 	RequestMessages []map[string]any
@@ -203,8 +206,8 @@ func StreamToOpenAI(w http.ResponseWriter, events <-chan KiroEvent, opts OpenAIS
 
 	// Calculate token usage.
 	completionTokens := tokenizer.CountTokens(fullContent + fullThinkingContent)
-	promptTokens := 0
-	totalTokens := completionTokens
+	promptTokens := opts.InputTokens
+	totalTokens := promptTokens + completionTokens
 
 	if contextUsagePct > 0 && opts.MaxInputTokens > 0 {
 		promptTokens = tokenizer.CalculatePromptTokens(completionTokens, contextUsagePct/100, opts.MaxInputTokens)
