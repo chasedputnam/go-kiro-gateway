@@ -536,6 +536,7 @@ VPN_PROXY_URL=192.168.1.100:8080
 | `/` | GET | Health check |
 | `/health` | GET | Detailed health check |
 | `/v1/models` | GET | List available models |
+| `/v1/responses` | POST | OpenAI Responses API (default; set `OPENAI_API_MODE=chat` to disable) |
 | `/v1/chat/completions` | POST | OpenAI Chat Completions API |
 | `/v1/messages` | POST | Anthropic Messages API |
 

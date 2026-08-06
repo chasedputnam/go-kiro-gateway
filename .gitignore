@@ -21,6 +21,7 @@ debug*.json
 # Project-specific
 _notes/
 requests/
+specs/
 
 # Testing
 build/

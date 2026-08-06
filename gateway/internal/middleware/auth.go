@@ -23,6 +23,7 @@ var protectedRoutes = map[string]apiKeyRoute{
 	"/v1/models":           {acceptXAPIKey: false, useAnthropicError: false},
 	"/v1/chat/completions": {acceptXAPIKey: false, useAnthropicError: false},
 	"/v1/messages":         {acceptXAPIKey: true, useAnthropicError: true},
+	"/v1/responses":        {acceptXAPIKey: false, useAnthropicError: false},
 }
 
 // Auth returns a chi-compatible middleware that validates the API key on

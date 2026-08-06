@@ -61,6 +61,7 @@ func run() error {
 	logging.Init(cfg.LogLevel, nil)
 
 	log.Info().Str("version", version).Msg("Kiro Gateway starting")
+	log.Info().Str("openai_api_mode", cfg.OpenAIAPIMode).Msg("OpenAI API mode")
 
 	// 3. Initialize auth manager (skipped in ACP mode).
 	var authMgr auth.AuthManager

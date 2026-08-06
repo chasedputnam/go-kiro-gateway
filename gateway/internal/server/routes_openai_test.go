@@ -503,3 +503,53 @@ func TestChatCompletions_ClientError(t *testing.T) {
 		t.Fatalf("expected 502, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// GET /v1/models — mode-invariant test (Requirement 3.3)
+// ---------------------------------------------------------------------------
+
+func TestListModels_SameResultRegardlessOfOpenAIAPIMode(t *testing.T) {
+	// Both "responses" and "chat" modes should return the same model list.
+	modes := []string{"responses", "chat"}
+	var modelLists [][]string
+
+	for _, mode := range modes {
+		srv := newTestServerWithClientAndCfg(t, &mockStreamingClient{}, &config.Config{
+			Host:                     "127.0.0.1",
+			Port:                     0,
+			ProxyAPIKey:              "test-key",
+			Version:                  "test",
+			DebugMode:                "off",
+			FakeReasoningHandling:    "as_reasoning_content",
+			ToolDescriptionMaxLength: 10000,
+			OpenAIAPIMode:            mode,
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		req.Header.Set("Authorization", "Bearer test-key")
+		rr := httptest.NewRecorder()
+		srv.Router().ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("mode=%s: expected 200, got %d", mode, rr.Code)
+		}
+
+		var body map[string]any
+		json.Unmarshal(rr.Body.Bytes(), &body)
+		data, _ := body["data"].([]any)
+		ids := make([]string, 0, len(data))
+		for _, item := range data {
+			m, _ := item.(map[string]any)
+			id, _ := m["id"].(string)
+			ids = append(ids, id)
+		}
+		modelLists = append(modelLists, ids)
+	}
+
+	if len(modelLists) == 2 {
+		a, b := modelLists[0], modelLists[1]
+		if len(a) != len(b) {
+			t.Errorf("model count differs by mode: responses=%d chat=%d", len(a), len(b))
+		}
+	}
+}

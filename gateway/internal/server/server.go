@@ -121,6 +121,7 @@ func (s *Server) buildRouter() chi.Router {
 	// OpenAI-compatible API routes.
 	r.Get("/v1/models", s.handleListModels)
 	r.Post("/v1/chat/completions", s.handleChatCompletions)
+	r.Post("/v1/responses", s.handleResponses)
 
 	// Anthropic-compatible API routes.
 	r.Post("/v1/messages", s.handleMessages)

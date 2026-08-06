@@ -32,6 +32,7 @@ func clearConfigEnvVars(t *testing.T) {
 		"DEFAULT_MAX_INPUT_TOKENS", "MAX_RETRIES", "BASE_RETRY_DELAY",
 		"TOKEN_REFRESH_THRESHOLD",
 		"BACKEND_MODE", "KIRO_CLI_PATH", "ACP_AGENT",
+		"OPENAI_API_MODE",
 	}
 	for _, v := range vars {
 		t.Setenv(v, "")
@@ -1036,4 +1037,76 @@ func containsSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// OpenAIAPIMode
+// ---------------------------------------------------------------------------
+
+func TestLoad_OpenAIAPIMode_Default(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"gateway"}
+	defer func() { os.Args = origArgs }()
+
+	clearConfigEnvVars(t)
+	setCredentialSource(t)
+	// OPENAI_API_MODE unset → default "responses"
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.OpenAIAPIMode != "responses" {
+		t.Errorf("OpenAIAPIMode default = %q, want %q", cfg.OpenAIAPIMode, "responses")
+	}
+}
+
+func TestLoad_OpenAIAPIMode_Chat(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"gateway"}
+	defer func() { os.Args = origArgs }()
+
+	clearConfigEnvVars(t)
+	setCredentialSource(t)
+	t.Setenv("OPENAI_API_MODE", "chat")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.OpenAIAPIMode != "chat" {
+		t.Errorf("OpenAIAPIMode = %q, want %q", cfg.OpenAIAPIMode, "chat")
+	}
+}
+
+func TestLoad_OpenAIAPIMode_Responses(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"gateway"}
+	defer func() { os.Args = origArgs }()
+
+	clearConfigEnvVars(t)
+	setCredentialSource(t)
+	t.Setenv("OPENAI_API_MODE", "responses")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.OpenAIAPIMode != "responses" {
+		t.Errorf("OpenAIAPIMode = %q, want %q", cfg.OpenAIAPIMode, "responses")
+	}
+}
+
+func TestLoad_OpenAIAPIMode_InvalidFallsBackToResponses(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"gateway"}
+	defer func() { os.Args = origArgs }()
+
+	clearConfigEnvVars(t)
+	setCredentialSource(t)
+	t.Setenv("OPENAI_API_MODE", "completions") // invalid value
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.OpenAIAPIMode != "responses" {
+		t.Errorf("OpenAIAPIMode for invalid value = %q, want %q (fallback)", cfg.OpenAIAPIMode, "responses")
+	}
 }

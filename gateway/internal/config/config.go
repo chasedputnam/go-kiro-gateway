@@ -91,6 +91,12 @@ type Config struct {
 	ACPAgent           string
 	ACPMaxIdleSessions int
 
+	// OpenAI API surface mode: "responses" (default) or "chat".
+	// "responses" enables POST /v1/responses as the primary OpenAI endpoint.
+	// "chat" keeps POST /v1/chat/completions as the primary endpoint;
+	// /v1/responses is still registered but returns HTTP 501.
+	OpenAIAPIMode string
+
 	// App
 	Version     string
 	Title       string
@@ -127,6 +133,8 @@ func Load() (*Config, error) {
 	cfg.KiroCLIPath = normalizePath(envStr("KIRO_CLI_PATH", ""))
 	cfg.ACPAgent = envStr("ACP_AGENT", "")
 	cfg.ACPMaxIdleSessions = envInt("ACP_MAX_IDLE_SESSIONS", 8)
+
+	cfg.OpenAIAPIMode = envEnum("OPENAI_API_MODE", "responses", []string{"responses", "chat"})
 
 	cfg.VPNProxyURL = envStr("VPN_PROXY_URL", "")
 
