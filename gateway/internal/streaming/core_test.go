@@ -624,6 +624,67 @@ func TestParseKiroStream_ToolCallEmptyArgs(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Tests: ParseKiroStream — incremental large tool input
+// ---------------------------------------------------------------------------
+
+func TestParseKiroStream_StreamsLargeToolInputIncrementally(t *testing.T) {
+	arguments := `{"file_path":"/tmp/large.txt","content":"` + strings.Repeat("界", 20000) + `"}`
+	data := combineChunks(
+		makeToolStartChunk("write", "call_write"),
+		makeToolInputChunk(arguments),
+		makeToolStopChunk(),
+	)
+
+	events := collectEvents(ParseKiroStream(context.Background(), bytes.NewReader(data), defaultOpts()))
+	starts := filterByType(events, EventTypeToolCallStart)
+	deltas := filterByType(events, EventTypeToolCallDelta)
+	stops := filterByType(events, EventTypeToolCallStop)
+	completed := filterByType(events, EventTypeToolCall)
+
+	if len(starts) != 1 || len(stops) != 1 || len(completed) != 1 {
+		t.Fatalf("unexpected tool lifecycle counts: starts=%d stops=%d completed=%d", len(starts), len(stops), len(completed))
+	}
+	if len(deltas) < 2 {
+		t.Fatalf("expected large Write input to be split across deltas, got %d", len(deltas))
+	}
+
+	var reconstructed strings.Builder
+	for _, event := range deltas {
+		if size := len(event.ToolCall.Arguments); size > maxToolArgumentDeltaBytes {
+			t.Fatalf("tool delta size %d exceeds limit %d", size, maxToolArgumentDeltaBytes)
+		}
+		reconstructed.WriteString(event.ToolCall.Arguments)
+	}
+	if reconstructed.String() != arguments {
+		t.Fatal("incremental tool deltas did not reconstruct the original Write input")
+	}
+	if completed[0].ToolCall.Arguments != arguments {
+		t.Fatal("completed tool call did not preserve the original Write input")
+	}
+}
+
+func TestParseKiroStream_ToolStartSatisfiesFirstTokenTimeout(t *testing.T) {
+	reader, writer := io.Pipe()
+	go func() {
+		defer writer.Close()
+		_, _ = writer.Write(makeToolStartChunk("write", "call_write"))
+		time.Sleep(100 * time.Millisecond)
+		_, _ = writer.Write(makeToolInputChunk(`{"file_path":"/tmp/a","content":"ok"}`))
+		_, _ = writer.Write(makeToolStopChunk())
+	}()
+
+	opts := defaultOpts()
+	opts.FirstTokenTimeout = 50 * time.Millisecond
+	events := collectEvents(ParseKiroStream(context.Background(), reader, opts))
+	if errors := filterByType(events, EventTypeError); len(errors) != 0 {
+		t.Fatalf("tool activity should satisfy first-token timeout, got error: %v", errors[0].Error)
+	}
+	if len(filterByType(events, EventTypeToolCall)) != 1 {
+		t.Fatal("expected completed Write tool call")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

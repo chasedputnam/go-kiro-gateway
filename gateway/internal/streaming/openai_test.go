@@ -223,6 +223,58 @@ func TestStreamToOpenAI_ToolCalls(t *testing.T) {
 	}
 }
 
+func TestStreamToOpenAI_StreamsLargeWriteArgumentsIncrementally(t *testing.T) {
+	arguments := `{"file_path":"/tmp/large.txt","content":"` + strings.Repeat("content-", 10000) + `"}`
+	events := feedEvents(
+		KiroEvent{Type: EventTypeToolCallStart, ToolCall: &ToolCallInfo{ID: "call_write", Name: "write"}},
+		KiroEvent{Type: EventTypeToolCallDelta, ToolCall: &ToolCallInfo{ID: "call_write", Name: "write", Arguments: arguments}},
+		KiroEvent{Type: EventTypeToolCallStop, ToolCall: &ToolCallInfo{ID: "call_write", Name: "write"}},
+		KiroEvent{Type: EventTypeToolCall, ToolCall: &ToolCallInfo{ID: "call_write", Name: "write", Arguments: arguments}},
+		KiroEvent{Type: EventTypeDone},
+	)
+
+	rec := httptest.NewRecorder()
+	StreamToOpenAI(rec, events, defaultOpenAIOpts())
+	chunks, _ := parseSSEChunks(rec.Body.String())
+
+	var reconstructed strings.Builder
+	argumentDeltaCount := 0
+	toolStartCount := 0
+	for _, chunk := range chunks {
+		choice := chunk["choices"].([]any)[0].(map[string]any)
+		delta := choice["delta"].(map[string]any)
+		rawCalls, ok := delta["tool_calls"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawCall := range rawCalls {
+			call := rawCall.(map[string]any)
+			if call["id"] != nil {
+				toolStartCount++
+			}
+			function, _ := call["function"].(map[string]any)
+			fragment, _ := function["arguments"].(string)
+			if fragment != "" {
+				argumentDeltaCount++
+				if len(fragment) > maxToolArgumentDeltaBytes {
+					t.Fatalf("OpenAI argument delta size %d exceeds limit %d", len(fragment), maxToolArgumentDeltaBytes)
+				}
+				reconstructed.WriteString(fragment)
+			}
+		}
+	}
+
+	if toolStartCount != 1 {
+		t.Fatalf("expected one streamed tool-call start without a buffered duplicate, got %d", toolStartCount)
+	}
+	if argumentDeltaCount < 2 {
+		t.Fatalf("expected large Write arguments in multiple deltas, got %d", argumentDeltaCount)
+	}
+	if reconstructed.String() != arguments {
+		t.Fatal("OpenAI tool-call deltas did not reconstruct the original Write arguments")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tests: StreamToOpenAI — tool calls with index field
 // ---------------------------------------------------------------------------

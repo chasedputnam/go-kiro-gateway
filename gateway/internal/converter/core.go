@@ -249,7 +249,7 @@ func BuildKiroPayload(opts BuildKiroPayloadOptions) (*KiroPayloadResult, error) 
 	// Add native extended thinking configuration if provided.
 	if opts.Thinking != nil && opts.Thinking.Type == "enabled" {
 		userInputMessage["thinking"] = map[string]any{
-			"type":         opts.Thinking.Type,
+			"type":          opts.Thinking.Type,
 			"budget_tokens": opts.Thinking.BudgetTokens,
 		}
 	}
@@ -1029,17 +1029,6 @@ func buildKiroHistory(messages []UnifiedMessage, modelID string, maxToolResultLe
 
 			toolUses := extractToolUsesFromMessage(msg.ToolCalls)
 			if len(toolUses) > 0 {
-				for _, tu := range toolUses {
-					name, _ := tu["name"].(string)
-					if strings.ToLower(name) == "write" {
-						if input, ok := tu["input"].(map[string]any); ok {
-							if content, ok := input["content"].(string); ok && len(content) > 0 {
-								filePath, _ := input["file_path"].(string)
-								input["content"] = fmt.Sprintf("[File written: %s — %d chars]", filePath, len(content))
-							}
-						}
-					}
-				}
 				assistantResp["toolUses"] = toolUses
 			}
 
@@ -1047,45 +1036,6 @@ func buildKiroHistory(messages []UnifiedMessage, modelID string, maxToolResultLe
 		}
 	}
 	return history
-}
-
-// ---------------------------------------------------------------------------
-// Payload budget trimming
-// ---------------------------------------------------------------------------
-
-// trimmableTools is the set of tool names whose history entries are safe to
-// truncate — their outputs either exist on disk or can be re-derived.
-var trimmableTools = map[string]bool{
-	"read":  true,
-	"write": true,
-	"bash":  true,
-	"edit":  true,
-}
-
-// compactWriteToolInput replaces the large "content" field in a Write tool use
-// input with a short summary. The file is already on disk so the model can
-// re-read it if needed; carrying the full content in history wastes payload.
-func compactWriteToolInput(input map[string]any) map[string]any {
-	content, hasContent := input["content"].(string)
-	if !hasContent || len(content) == 0 {
-		return input
-	}
-	filePath, _ := input["file_path"].(string)
-	out := make(map[string]any, len(input))
-	for k, v := range input {
-		out[k] = v
-	}
-	out["content"] = fmt.Sprintf("[File written: %s — %d chars. Please read the file for proper content before writing again.]", filePath, len(content))
-	return out
-}
-
-// copyMap returns a shallow copy of a map[string]any.
-func copyMap(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }
 
 // ---------------------------------------------------------------------------

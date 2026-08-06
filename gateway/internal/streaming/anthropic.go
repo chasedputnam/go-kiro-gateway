@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/parser"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/thinking"
@@ -125,6 +126,14 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 		fullThinkingContent string
 		contextUsagePct     float64
 		toolCallsFromStream []ToolCallInfo
+
+		activeToolBlockIndex  = -1
+		activeToolCallID      string
+		activeToolCallName    string
+		activeToolCallArgs    strings.Builder
+		streamedToolCallCount int
+		streamedToolCallIDs   = make(map[string]struct{})
+		streamedToolCallSigs  = make(map[string]struct{})
 	)
 
 	// closeThinkingBlock emits content_block_stop for the thinking block.
@@ -170,6 +179,35 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 		textBlockStarted = true
 	}
 
+	closeActiveToolBlock := func() {
+		if activeToolBlockIndex < 0 {
+			return
+		}
+		writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": activeToolBlockIndex,
+		})
+		if activeToolCallID != "" {
+			streamedToolCallIDs[activeToolCallID] = struct{}{}
+		}
+		streamedToolCallSigs[toolCallSignature(activeToolCallName, activeToolCallArgs.String())] = struct{}{}
+		activeToolBlockIndex = -1
+		activeToolCallID = ""
+		activeToolCallName = ""
+		activeToolCallArgs.Reset()
+		currentBlockIndex++
+	}
+
+	wasStreamed := func(tc ToolCallInfo) bool {
+		if tc.ID != "" {
+			if _, ok := streamedToolCallIDs[tc.ID]; ok {
+				return true
+			}
+		}
+		_, ok := streamedToolCallSigs[toolCallSignature(tc.Name, tc.Arguments)]
+		return ok
+	}
+
 	for event := range events {
 		switch event.Type {
 		case EventTypeContent:
@@ -185,7 +223,8 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 
 			fullContent += event.Content
 
-			// Close thinking block if transitioning to regular content.
+			// Close any previous block before transitioning to regular content.
+			closeActiveToolBlock()
 			closeThinkingBlock()
 
 			// Start text block if needed.
@@ -207,6 +246,7 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 			}
 
 			fullThinkingContent += event.ThinkingContent
+			closeActiveToolBlock()
 
 			if opts.ThinkingHandlingMode == thinking.AsReasoningContent {
 				// Start thinking block if not started.
@@ -236,6 +276,53 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 			}
 			// For other modes, thinking content is either passed as text or dropped.
 
+		case EventTypeToolCallStart:
+			if event.ToolCall == nil {
+				continue
+			}
+			closeThinkingBlock()
+			closeTextBlock()
+			closeActiveToolBlock()
+
+			activeToolBlockIndex = currentBlockIndex
+			activeToolCallID = event.ToolCall.ID
+			activeToolCallName = event.ToolCall.Name
+			streamedToolCallCount++
+
+			toolID := activeToolCallID
+			if toolID == "" {
+				toolID = GenerateToolUseID()
+			}
+			writeSSEEvent(w, flusher, "content_block_start", map[string]any{
+				"type":  "content_block_start",
+				"index": activeToolBlockIndex,
+				"content_block": map[string]any{
+					"type":  "tool_use",
+					"id":    toolID,
+					"name":  activeToolCallName,
+					"input": map[string]any{},
+				},
+			})
+
+		case EventTypeToolCallDelta:
+			if event.ToolCall == nil || activeToolBlockIndex < 0 {
+				continue
+			}
+			activeToolCallArgs.WriteString(event.ToolCall.Arguments)
+			for _, fragment := range splitToolArgumentDelta(event.ToolCall.Arguments) {
+				writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": activeToolBlockIndex,
+					"delta": map[string]any{
+						"type":         "input_json_delta",
+						"partial_json": fragment,
+					},
+				})
+			}
+
+		case EventTypeToolCallStop:
+			closeActiveToolBlock()
+
 		case EventTypeToolCall:
 			if event.ToolCall != nil {
 				toolCallsFromStream = append(toolCallsFromStream, *event.ToolCall)
@@ -248,6 +335,8 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 			log.Error().Err(event.Error).Msg("Kiro API error during Anthropic streaming — sending clean stream termination")
 			// Inject a short error notice into the stream so the agent sees
 			// what happened, then close blocks and terminate cleanly.
+			closeActiveToolBlock()
+			closeThinkingBlock()
 			ensureTextBlock()
 			errMsg := fmt.Sprintf("\n\n[Gateway error: %v]", event.Error)
 			writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
@@ -282,6 +371,8 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 
 	// --- Post-stream processing ---
 
+	closeActiveToolBlock()
+
 	// Parse bracket-style tool calls from accumulated content.
 	bracketCalls := parser.ParseBracketToolCalls(fullContent)
 	allToolCalls := mergeAndDeduplicateToolCalls(toolCallsFromStream, bracketCalls)
@@ -292,8 +383,12 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 	// Close text block if still open.
 	closeTextBlock()
 
-	// Emit tool_use content blocks.
+	// Emit fallback/bracket tool calls that were not already sent through the
+	// incremental lifecycle events.
 	for _, tc := range allToolCalls {
+		if wasStreamed(tc) {
+			continue
+		}
 		toolID := tc.ID
 		if toolID == "" {
 			toolID = GenerateToolUseID()
@@ -347,7 +442,7 @@ func StreamToAnthropic(w http.ResponseWriter, events <-chan KiroEvent, opts Anth
 
 	// Determine stop reason.
 	stopReason := "end_turn"
-	if len(allToolCalls) > 0 {
+	if len(allToolCalls) > 0 || streamedToolCallCount > 0 {
 		stopReason = "tool_use"
 	}
 

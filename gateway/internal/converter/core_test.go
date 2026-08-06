@@ -1198,10 +1198,10 @@ func TestBuildKiroHistory_WithImages(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// compactWriteToolInput / buildKiroHistory Write compaction
+// buildKiroHistory Write content preservation
 // ---------------------------------------------------------------------------
 
-func TestBuildKiroHistory_CompactsWriteToolInput(t *testing.T) {
+func TestBuildKiroHistory_PreservesWriteToolInput(t *testing.T) {
 	largeContent := strings.Repeat("x", 5000)
 	msgs := []UnifiedMessage{
 		{
@@ -1223,13 +1223,11 @@ func TestBuildKiroHistory_CompactsWriteToolInput(t *testing.T) {
 	toolUses := history[0]["assistantResponseMessage"].(map[string]any)["toolUses"].([]map[string]any)
 	input := toolUses[0]["input"].(map[string]any)
 	content, _ := input["content"].(string)
-	if strings.Contains(content, "x") {
-		t.Fatal("expected Write content to be compacted, got raw content")
+	if content != largeContent {
+		t.Fatalf("Write content changed in Kiro history: got %d chars, want %d", len(content), len(largeContent))
 	}
-	if !strings.Contains(content, "/tmp/foo.go") {
-		t.Fatal("expected compacted summary to include file path")
-	}
-	if !strings.Contains(content, "5000") {
-		t.Fatal("expected compacted summary to include original char count")
+	originalInput := msgs[0].ToolCalls[0]["input"].(map[string]any)
+	if originalInput["content"] != largeContent {
+		t.Fatal("building Kiro history mutated the original Write tool input")
 	}
 }

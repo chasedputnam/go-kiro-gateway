@@ -295,6 +295,62 @@ func TestStreamToAnthropic_ToolUseBlocks(t *testing.T) {
 	}
 }
 
+func TestStreamToAnthropic_StreamsLargeWriteInputIncrementally(t *testing.T) {
+	arguments := `{"file_path":"/tmp/large.txt","content":"` + strings.Repeat("content-", 10000) + `"}`
+	events := feedEvents(
+		KiroEvent{Type: EventTypeToolCallStart, ToolCall: &ToolCallInfo{ID: "toolu_write", Name: "write"}},
+		KiroEvent{Type: EventTypeToolCallDelta, ToolCall: &ToolCallInfo{ID: "toolu_write", Name: "write", Arguments: arguments}},
+		KiroEvent{Type: EventTypeToolCallStop, ToolCall: &ToolCallInfo{ID: "toolu_write", Name: "write"}},
+		KiroEvent{Type: EventTypeToolCall, ToolCall: &ToolCallInfo{ID: "toolu_write", Name: "write", Arguments: arguments}},
+		KiroEvent{Type: EventTypeDone},
+	)
+
+	rec := httptest.NewRecorder()
+	StreamToAnthropic(rec, events, defaultAnthropicOpts())
+	sseEvents := parseAnthropicSSE(rec.Body.String())
+
+	var reconstructed strings.Builder
+	argumentDeltaCount := 0
+	toolStartCount := 0
+	toolStopCount := 0
+	toolBlockIndexes := make(map[int]struct{})
+	for _, event := range sseEvents {
+		switch event.EventType {
+		case "content_block_start":
+			block := event.Data["content_block"].(map[string]any)
+			if block["type"] == "tool_use" {
+				toolStartCount++
+				toolBlockIndexes[int(event.Data["index"].(float64))] = struct{}{}
+			}
+		case "content_block_delta":
+			delta := event.Data["delta"].(map[string]any)
+			if delta["type"] == "input_json_delta" {
+				fragment := delta["partial_json"].(string)
+				argumentDeltaCount++
+				if len(fragment) > maxToolArgumentDeltaBytes {
+					t.Fatalf("Anthropic input delta size %d exceeds limit %d", len(fragment), maxToolArgumentDeltaBytes)
+				}
+				reconstructed.WriteString(fragment)
+			}
+		case "content_block_stop":
+			index := int(event.Data["index"].(float64))
+			if _, ok := toolBlockIndexes[index]; ok {
+				toolStopCount++
+			}
+		}
+	}
+
+	if toolStartCount != 1 || toolStopCount != 1 {
+		t.Fatalf("expected one streamed tool block without a buffered duplicate, got starts=%d stops=%d", toolStartCount, toolStopCount)
+	}
+	if argumentDeltaCount < 2 {
+		t.Fatalf("expected large Write input in multiple deltas, got %d", argumentDeltaCount)
+	}
+	if reconstructed.String() != arguments {
+		t.Fatal("Anthropic input_json_delta events did not reconstruct the original Write input")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tests: StreamToAnthropic — stop_reason end_turn
 // ---------------------------------------------------------------------------

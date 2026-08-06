@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -93,7 +94,39 @@ func StreamToOpenAI(w http.ResponseWriter, events <-chan KiroEvent, opts OpenAIS
 		contextUsagePct     float64
 		usageCredits        *float64
 		toolCallsFromStream []ToolCallInfo
+
+		nextToolCallIndex    int
+		activeToolCallIndex  = -1
+		activeToolCallID     string
+		activeToolCallName   string
+		activeToolCallArgs   strings.Builder
+		streamedToolCallIDs  = make(map[string]struct{})
+		streamedToolCallSigs = make(map[string]struct{})
 	)
+
+	finishStreamedToolCall := func() {
+		if activeToolCallIndex < 0 {
+			return
+		}
+		if activeToolCallID != "" {
+			streamedToolCallIDs[activeToolCallID] = struct{}{}
+		}
+		streamedToolCallSigs[toolCallSignature(activeToolCallName, activeToolCallArgs.String())] = struct{}{}
+		activeToolCallIndex = -1
+		activeToolCallID = ""
+		activeToolCallName = ""
+		activeToolCallArgs.Reset()
+	}
+
+	wasStreamed := func(tc ToolCallInfo) bool {
+		if tc.ID != "" {
+			if _, ok := streamedToolCallIDs[tc.ID]; ok {
+				return true
+			}
+		}
+		_, ok := streamedToolCallSigs[toolCallSignature(tc.Name, tc.Arguments)]
+		return ok
+	}
 
 	for event := range events {
 		switch event.Type {
@@ -139,6 +172,56 @@ func StreamToOpenAI(w http.ResponseWriter, events <-chan KiroEvent, opts OpenAIS
 
 			writeOpenAIChunk(w, flusher, completionID, createdTime, opts.Model, delta, nil)
 
+		case EventTypeToolCallStart:
+			if event.ToolCall == nil {
+				continue
+			}
+			finishStreamedToolCall()
+			activeToolCallIndex = nextToolCallIndex
+			nextToolCallIndex++
+			activeToolCallID = event.ToolCall.ID
+			activeToolCallName = event.ToolCall.Name
+
+			toolID := activeToolCallID
+			if toolID == "" {
+				toolID = GenerateToolCallID()
+			}
+			delta := map[string]any{
+				"tool_calls": []map[string]any{{
+					"index": activeToolCallIndex,
+					"id":    toolID,
+					"type":  "function",
+					"function": map[string]any{
+						"name":      activeToolCallName,
+						"arguments": "",
+					},
+				}},
+			}
+			if firstChunk {
+				delta["role"] = "assistant"
+				firstChunk = false
+			}
+			writeOpenAIChunk(w, flusher, completionID, createdTime, opts.Model, delta, nil)
+
+		case EventTypeToolCallDelta:
+			if event.ToolCall == nil || activeToolCallIndex < 0 {
+				continue
+			}
+			activeToolCallArgs.WriteString(event.ToolCall.Arguments)
+			for _, fragment := range splitToolArgumentDelta(event.ToolCall.Arguments) {
+				writeOpenAIChunk(w, flusher, completionID, createdTime, opts.Model, map[string]any{
+					"tool_calls": []map[string]any{{
+						"index": activeToolCallIndex,
+						"function": map[string]any{
+							"arguments": fragment,
+						},
+					}},
+				}, nil)
+			}
+
+		case EventTypeToolCallStop:
+			finishStreamedToolCall()
+
 		case EventTypeToolCall:
 			if event.ToolCall != nil {
 				toolCallsFromStream = append(toolCallsFromStream, *event.ToolCall)
@@ -172,35 +255,46 @@ func StreamToOpenAI(w http.ResponseWriter, events <-chan KiroEvent, opts OpenAIS
 
 	// --- Post-stream processing ---
 
+	finishStreamedToolCall()
+
 	// Parse bracket-style tool calls from accumulated content.
 	bracketCalls := parser.ParseBracketToolCalls(fullContent)
 	allToolCalls := mergeAndDeduplicateToolCalls(toolCallsFromStream, bracketCalls)
 
 	// Determine finish_reason.
 	finishReason := "stop"
-	if len(allToolCalls) > 0 {
+	if len(allToolCalls) > 0 || nextToolCallIndex > 0 {
 		finishReason = "tool_calls"
 	}
 
-	// Send tool calls chunk if present.
-	if len(allToolCalls) > 0 {
-		indexedToolCalls := make([]map[string]any, 0, len(allToolCalls))
-		for idx, tc := range allToolCalls {
-			id := tc.ID
-			if id == "" {
-				id = GenerateToolCallID()
-			}
-			indexedToolCalls = append(indexedToolCalls, map[string]any{
-				"index": idx,
-				"id":    id,
-				"type":  "function",
-				"function": map[string]any{
-					"name":      tc.Name,
-					"arguments": tc.Arguments,
-				},
-			})
+	// Emit fallback/bracket tool calls that were not already sent through the
+	// incremental lifecycle events.
+	var fallbackToolCalls []map[string]any
+	for _, tc := range allToolCalls {
+		if wasStreamed(tc) {
+			continue
 		}
-		delta := map[string]any{"tool_calls": indexedToolCalls}
+		id := tc.ID
+		if id == "" {
+			id = GenerateToolCallID()
+		}
+		fallbackToolCalls = append(fallbackToolCalls, map[string]any{
+			"index": nextToolCallIndex,
+			"id":    id,
+			"type":  "function",
+			"function": map[string]any{
+				"name":      tc.Name,
+				"arguments": tc.Arguments,
+			},
+		})
+		nextToolCallIndex++
+	}
+	if len(fallbackToolCalls) > 0 {
+		delta := map[string]any{"tool_calls": fallbackToolCalls}
+		if firstChunk {
+			delta["role"] = "assistant"
+			firstChunk = false
+		}
 		writeOpenAIChunk(w, flusher, completionID, createdTime, opts.Model, delta, nil)
 	}
 

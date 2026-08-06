@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 
 ## [Unreleased]
 
+### Fixed
+- Preserve full `Write` tool inputs in Kiro conversation history instead of replacing file content with a synthetic `File written` message
+- Stream tool-call arguments incrementally in bounded SSE deltas for both OpenAI and Anthropic clients, including large file writes
+- Treat tool-call activity as the first streamed token so long-running writes do not trigger a false first-token timeout
+
 ---
 
 ## [2.0.0] - 2025-05-28

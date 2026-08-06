@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/config"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/parser"
@@ -34,13 +35,21 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	EventTypeContent  = "content"
-	EventTypeThinking = "thinking"
-	EventTypeToolCall = "tool_call"
-	EventTypeUsage    = "usage"
-	EventTypeDone     = "done"
-	EventTypeError    = "error"
+	EventTypeContent       = "content"
+	EventTypeThinking      = "thinking"
+	EventTypeToolCallStart = "tool_call_start"
+	EventTypeToolCallDelta = "tool_call_delta"
+	EventTypeToolCallStop  = "tool_call_stop"
+	EventTypeToolCall      = "tool_call"
+	EventTypeUsage         = "usage"
+	EventTypeDone          = "done"
+	EventTypeError         = "error"
 )
+
+// maxToolArgumentDeltaBytes bounds each downstream SSE tool-input delta.
+// Kiro may place a very large fragment in one event; splitting it prevents a
+// file write from becoming a single oversized response chunk.
+const maxToolArgumentDeltaBytes = 16 * 1024
 
 // ---------------------------------------------------------------------------
 // Data structs
@@ -80,7 +89,10 @@ type KiroEvent struct {
 	// IsLastThinkingChunk is true for the last thinking event in a stream.
 	IsLastThinkingChunk bool
 
-	// ToolCall holds a completed tool call (Type == EventTypeToolCall).
+	// ToolCall carries tool lifecycle data. Start events populate ID and Name,
+	// delta events populate Arguments with the raw JSON fragment, stop events
+	// identify the completed call, and EventTypeToolCall contains the validated
+	// complete call used by non-streaming collectors and truncation recovery.
 	ToolCall *ToolCallInfo
 
 	// Usage holds credit consumption data (Type == EventTypeUsage).
@@ -101,8 +113,8 @@ type KiroEvent struct {
 
 // StreamOptions configures ParseKiroStream behaviour.
 type StreamOptions struct {
-	// FirstTokenTimeout is how long to wait for the first content/thinking
-	// event before raising a timeout. Zero disables the timeout.
+	// FirstTokenTimeout is how long to wait for the first content, thinking,
+	// or tool-call event before raising a timeout. Zero disables the timeout.
 	FirstTokenTimeout time.Duration
 
 	// EnableThinkingParser controls whether the thinking FSM is active.
@@ -162,6 +174,49 @@ func send(ctx context.Context, ch chan<- KiroEvent, evt KiroEvent) bool {
 	}
 }
 
+// splitToolArgumentDelta splits a tool-input fragment into bounded chunks
+// without cutting a UTF-8 code point. Concatenating the returned strings
+// always reconstructs the original fragment exactly.
+func splitToolArgumentDelta(s string) []string {
+	if s == "" {
+		return nil
+	}
+	if len(s) <= maxToolArgumentDeltaBytes {
+		return []string{s}
+	}
+
+	chunks := make([]string, 0, (len(s)/maxToolArgumentDeltaBytes)+1)
+	for len(s) > maxToolArgumentDeltaBytes {
+		end := maxToolArgumentDeltaBytes
+		for end > 0 && !utf8.RuneStart(s[end]) {
+			end--
+		}
+		if end == 0 {
+			end = maxToolArgumentDeltaBytes
+		}
+		chunks = append(chunks, s[:end])
+		s = s[end:]
+	}
+	if s != "" {
+		chunks = append(chunks, s)
+	}
+	return chunks
+}
+
+// toolCallSignature produces a stable key for matching lifecycle events with
+// their later validated EventTypeToolCall. Valid JSON is canonicalized so
+// insignificant whitespace differences do not cause duplicate emission.
+func toolCallSignature(name, arguments string) string {
+	canonical := arguments
+	var parsed any
+	if json.Unmarshal([]byte(arguments), &parsed) == nil {
+		if encoded, err := json.Marshal(parsed); err == nil {
+			canonical = string(encoded)
+		}
+	}
+	return name + "\x00" + canonical
+}
+
 // parseKiroStreamInternal contains the actual parsing logic. It runs inside
 // the goroutine spawned by ParseKiroStream.
 func parseKiroStreamInternal(ctx context.Context, r io.Reader, opts StreamOptions, ch chan<- KiroEvent) {
@@ -185,10 +240,11 @@ func parseKiroStreamInternal(ctx context.Context, r io.Reader, opts StreamOption
 	var currentTC *toolCallState
 	var completedToolCalls []ToolCallInfo
 
-	// finalizeToolCall validates and stores the current tool call.
-	finalizeToolCall := func() {
+	// finalizeToolCall validates and stores the current tool call. The returned
+	// value identifies the call for a lifecycle stop event.
+	finalizeToolCall := func() *ToolCallInfo {
 		if currentTC == nil {
-			return
+			return nil
 		}
 		args := strings.TrimSpace(currentTC.argsAccum.String())
 		tc := ToolCallInfo{
@@ -218,11 +274,12 @@ func parseKiroStreamInternal(ctx context.Context, r io.Reader, opts StreamOption
 
 		completedToolCalls = append(completedToolCalls, tc)
 		currentTC = nil
+		return &tc
 	}
 
 	// Read loop — read chunks from the reader.
 	buf := make([]byte, 32*1024) // 32 KB read buffer
-	var leftover []byte           // bytes from a previous chunk that didn't form a complete JSON event
+	var leftover []byte          // bytes from a previous chunk that didn't form a complete JSON event
 	firstTokenReceived := false
 
 	// Set up first-token timeout context if configured.
@@ -235,6 +292,13 @@ func parseKiroStreamInternal(ctx context.Context, r io.Reader, opts StreamOption
 		firstTokenCancel = func() {}
 	}
 	defer firstTokenCancel()
+
+	markFirstToken := func() {
+		if !firstTokenReceived {
+			firstTokenReceived = true
+			firstTokenCancel()
+		}
+	}
 
 	// readChunk reads from r with first-token timeout awareness.
 	// Returns the bytes read, or an error. io.EOF signals end of stream.
@@ -343,20 +407,63 @@ func parseKiroStreamInternal(ctx context.Context, r io.Reader, opts StreamOption
 					}
 
 				case parser.EventToolStart:
-					// Finalize any in-progress tool call.
-					finalizeToolCall()
+					// Finalize any in-progress tool call before starting the next one.
+					if previous := finalizeToolCall(); previous != nil {
+						if !send(ctx, ch, KiroEvent{
+							Type: EventTypeToolCallStop,
+							ToolCall: &ToolCallInfo{
+								ID:   previous.ID,
+								Name: previous.Name,
+							},
+						}) {
+							return
+						}
+					}
 					currentTC = &toolCallState{
 						id:   evt.ToolUseID,
 						name: evt.ToolName,
 					}
+					if !send(ctx, ch, KiroEvent{
+						Type: EventTypeToolCallStart,
+						ToolCall: &ToolCallInfo{
+							ID:   evt.ToolUseID,
+							Name: evt.ToolName,
+						},
+					}) {
+						return
+					}
+					markFirstToken()
 
 				case parser.EventToolInput:
 					if currentTC != nil {
 						currentTC.argsAccum.WriteString(evt.ToolInput)
+						for _, fragment := range splitToolArgumentDelta(evt.ToolInput) {
+							if !send(ctx, ch, KiroEvent{
+								Type: EventTypeToolCallDelta,
+								ToolCall: &ToolCallInfo{
+									ID:        currentTC.id,
+									Name:      currentTC.name,
+									Arguments: fragment,
+								},
+							}) {
+								return
+							}
+							markFirstToken()
+						}
 					}
 
 				case parser.EventToolStop:
-					finalizeToolCall()
+					if completed := finalizeToolCall(); completed != nil {
+						if !send(ctx, ch, KiroEvent{
+							Type: EventTypeToolCallStop,
+							ToolCall: &ToolCallInfo{
+								ID:   completed.ID,
+								Name: completed.Name,
+							},
+						}) {
+							return
+						}
+					}
 
 				case parser.EventUsage:
 					if evt.Usage != nil {
@@ -392,8 +499,18 @@ func parseKiroStreamInternal(ctx context.Context, r io.Reader, opts StreamOption
 		}
 	}
 
-	// Finalize any in-progress tool call.
-	finalizeToolCall()
+	// Finalize any in-progress tool call and close its lifecycle stream.
+	if completed := finalizeToolCall(); completed != nil {
+		if !send(ctx, ch, KiroEvent{
+			Type: EventTypeToolCallStop,
+			ToolCall: &ToolCallInfo{
+				ID:   completed.ID,
+				Name: completed.Name,
+			},
+		}) {
+			return
+		}
+	}
 
 	// Finalize thinking parser.
 	if thinkingParser != nil {
