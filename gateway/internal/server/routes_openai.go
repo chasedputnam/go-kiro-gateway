@@ -24,7 +24,6 @@ import (
 	gwerrors "github.com/chasedputnam/go-kiro-gateway/gateway/internal/errors"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/streaming"
-	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/tokenizer"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/truncation"
 )
 
@@ -128,7 +127,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payloadResult, err := converter.BuildKiroPayload(converter.BuildKiroPayloadOptions{
+	// Pre-validate payload construction (tool-name limits, message shape).
+	// The actual — and possibly history-trimmed — payload is rebuilt inside
+	// completeWithSizeRecovery.
+	if _, err := converter.BuildKiroPayload(converter.BuildKiroPayloadOptions{
 		Messages:       converted.Messages,
 		SystemPrompt:   converted.SystemPrompt,
 		ModelID:        modelID,
@@ -137,8 +139,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		ProfileARN:     profileARN,
 		InjectThinking: true,
 		Cfg:            s.config,
-	})
-	if err != nil {
+	}); err != nil {
 		log.Error().Err(err).Msg("Payload build error")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -147,73 +148,79 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Estimate input tokens from request messages, tools, and system prompt.
-	inputTokens := tokenizer.EstimatePromptTokensFromMessages(converted.Messages, converted.Tools) +
-		tokenizer.CountTokens(converted.SystemPrompt)
-
-	// Log the Kiro request body for debug.
-	if kiroBody, err := json.Marshal(payloadResult.Payload); err == nil {
-		s.debugLogger.LogKiroRequestBody(kiroBody)
-	}
-
-	// Build Kiro API URL.
+	// Build Kiro API URL and stream options.
 	kiroURL := s.auth.APIHost() + "/generateAssistantResponse"
-
-	// Get max input tokens for the model.
 	maxInputTokens := s.cache.GetMaxInputTokens(modelID)
-
-	// Stream options.
 	streamOpts := streaming.DefaultStreamOptions(s.config)
 
+	// Tokens reserved for the completion (OpenAI max_tokens is optional).
+	reserveTokens := 0
+	if req.MaxTokens != nil {
+		reserveTokens = *req.MaxTokens
+	}
+
+	// Build the payload within an input-token budget and send it: trims oldest
+	// history proactively and retries on CONTENT_LENGTH_EXCEEDS_THRESHOLD.
+	events, inputTokens, err := s.completeWithSizeRecovery(r.Context(), sizeRecoveryParams{
+		Messages:       converted.Messages,
+		SystemPrompt:   converted.SystemPrompt,
+		Tools:          converted.Tools,
+		ModelID:        modelID,
+		ConversationID: conversationID,
+		ProfileARN:     profileARN,
+		InjectThinking: true,
+		Model:          req.Model,
+		KiroURL:        kiroURL,
+		Stream:         req.Stream,
+		StreamOpts:     streamOpts,
+		MaxInputTokens: maxInputTokens,
+		ReserveTokens:  reserveTokens,
+	})
+	if err != nil {
+		s.writeOpenAIUpstreamError(w, err, start)
+		return
+	}
+
 	if req.Stream {
-		s.handleOpenAIStreaming(w, r, payloadResult.Payload, kiroURL, req.Model, maxInputTokens, inputTokens, streamOpts, start)
+		s.handleOpenAIStreaming(w, events, req.Model, maxInputTokens, inputTokens, streamOpts, start)
 	} else {
-		s.handleOpenAINonStreaming(w, r, payloadResult.Payload, kiroURL, req.Model, maxInputTokens, inputTokens, streamOpts, start)
+		s.handleOpenAINonStreaming(w, events, req.Model, maxInputTokens, inputTokens, streamOpts, start)
 	}
 }
 
-// handleOpenAIStreaming handles streaming chat completion requests.
+// writeOpenAIUpstreamError writes an OpenAI-format error response for a failed
+// upstream request. It forwards the upstream status for *HTTPError and returns
+// 502 for transport-level errors, matching the previous behaviour.
+func (s *Server) writeOpenAIUpstreamError(w http.ResponseWriter, err error, start time.Time) {
+	duration := time.Since(start)
+	var httpErr *backendpkg.HTTPError
+	if errors.As(err, &httpErr) {
+		log.Warn().Int("status", httpErr.StatusCode).Dur("duration", duration).Str("error", truncateString(httpErr.Body, 100)).Msg("POST /v1/chat/completions - upstream error")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(httpErr.StatusCode)
+		w.Write(gwerrors.OpenAIErrorResponse(httpErr.Body, "api_error", httpErr.StatusCode))
+		s.debugLogger.FlushOnError(httpErr.StatusCode, httpErr.Body)
+		return
+	}
+	log.Error().Err(err).Dur("duration", duration).Msg("HTTP 502 - POST /v1/chat/completions")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadGateway)
+	w.Write(gwerrors.OpenAIErrorResponse(err.Error(), "api_error", http.StatusBadGateway))
+	s.debugLogger.FlushOnError(http.StatusBadGateway, err.Error())
+}
+
+// handleOpenAIStreaming streams the given Kiro events to the client in OpenAI
+// SSE format. The upstream request has already been sent by
+// completeWithSizeRecovery.
 func (s *Server) handleOpenAIStreaming(
 	w http.ResponseWriter,
-	r *http.Request,
-	payload map[string]any,
-	kiroURL string,
+	events <-chan streaming.KiroEvent,
 	model string,
 	maxInputTokens int,
 	inputTokens int,
 	streamOpts streaming.StreamOptions,
 	start time.Time,
 ) {
-	ctx := r.Context()
-
-	events, err := s.backend.Complete(ctx, &backendpkg.Request{
-		Payload:        payload,
-		Model:          model,
-		Stream:         true,
-		ProfileARN:     s.auth.ProfileARN(),
-		KiroURL:        kiroURL,
-		MaxInputTokens: maxInputTokens,
-		StreamOpts:     streamOpts,
-	})
-	if err != nil {
-		duration := time.Since(start)
-		var httpErr *backendpkg.HTTPError
-		if errors.As(err, &httpErr) {
-			log.Warn().Int("status", httpErr.StatusCode).Dur("duration", duration).Str("error", truncateString(httpErr.Body, 100)).Msg("POST /v1/chat/completions - upstream error (streaming)")
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(httpErr.StatusCode)
-			w.Write(gwerrors.OpenAIErrorResponse(httpErr.Body, "api_error", httpErr.StatusCode))
-			s.debugLogger.FlushOnError(httpErr.StatusCode, httpErr.Body)
-			return
-		}
-		log.Error().Err(err).Dur("duration", duration).Msg("HTTP 502 - POST /v1/chat/completions (streaming)")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		w.Write(gwerrors.OpenAIErrorResponse(err.Error(), "api_error", http.StatusBadGateway))
-		s.debugLogger.FlushOnError(http.StatusBadGateway, err.Error())
-		return
-	}
-
 	openAIOpts := streaming.OpenAIStreamOptions{
 		Model:                model,
 		ThinkingHandlingMode: streamOpts.ThinkingHandlingMode,
@@ -243,47 +250,18 @@ func (s *Server) handleOpenAIStreaming(
 	s.debugLogger.DiscardBuffers()
 }
 
-// handleOpenAINonStreaming handles non-streaming chat completion requests.
+// handleOpenAINonStreaming collects the given Kiro events into a single OpenAI
+// response. The upstream request has already been sent by
+// completeWithSizeRecovery.
 func (s *Server) handleOpenAINonStreaming(
 	w http.ResponseWriter,
-	r *http.Request,
-	payload map[string]any,
-	kiroURL string,
+	events <-chan streaming.KiroEvent,
 	model string,
 	maxInputTokens int,
 	inputTokens int,
 	streamOpts streaming.StreamOptions,
 	start time.Time,
 ) {
-	ctx := r.Context()
-
-	events, err := s.backend.Complete(ctx, &backendpkg.Request{
-		Payload:        payload,
-		Model:          model,
-		Stream:         false,
-		ProfileARN:     s.auth.ProfileARN(),
-		KiroURL:        kiroURL,
-		MaxInputTokens: maxInputTokens,
-		StreamOpts:     streamOpts,
-	})
-	if err != nil {
-		duration := time.Since(start)
-		var httpErr *backendpkg.HTTPError
-		if errors.As(err, &httpErr) {
-			log.Warn().Int("status", httpErr.StatusCode).Dur("duration", duration).Str("error", truncateString(httpErr.Body, 100)).Msg("POST /v1/chat/completions - upstream error (non-streaming)")
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(httpErr.StatusCode)
-			w.Write(gwerrors.OpenAIErrorResponse(httpErr.Body, "api_error", httpErr.StatusCode))
-			s.debugLogger.FlushOnError(httpErr.StatusCode, httpErr.Body)
-			return
-		}
-		log.Error().Err(err).Dur("duration", duration).Msg("HTTP 502 - POST /v1/chat/completions (non-streaming)")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		w.Write(gwerrors.OpenAIErrorResponse(err.Error(), "api_error", http.StatusBadGateway))
-		s.debugLogger.FlushOnError(http.StatusBadGateway, err.Error())
-		return
-	}
 	collected := streaming.CollectFullResponse(events)
 
 	openAIResp := streaming.BuildOpenAIResponse(collected, streaming.OpenAINonStreamOptions{

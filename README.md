@@ -779,6 +779,8 @@ Large tool calls and accumulated tool results can create oversized payloads. The
 1. **Incremental tool-call streaming** — tool starts and input fragments are forwarded as soon as Kiro emits them. Large fragments are split into bounded SSE deltas, so a `Write` call does not become one oversized response chunk.
 2. **Write input preservation** — `Write` tool inputs are kept unchanged when conversation history is sent back to Kiro. The model sees the same file content that the agent received instead of a synthetic `File written` placeholder.
 3. **Per-result cap** — individual tool results exceeding `MAX_TOOL_RESULT_CONTENT_LENGTH` are truncated with an `[API Limitation]` notice so the model knows to re-read if needed.
+4. **Input-token budget (whole payload)** — before sending, the gateway estimates the total input tokens (history + current message + tools + system prompt) and trims the **oldest** history until it fits `INPUT_TOKEN_BUDGET_RATIO` × the model's context window, minus the request's `max_tokens`. A `[System Notice]` is added so the model knows older turns were dropped. This is the primary defence against the Kiro API's `CONTENT_LENGTH_EXCEEDS_THRESHOLD` rejection, which is enforced against the entire request, not any single item.
+5. **Content-length retry recovery** — if the API still returns `CONTENT_LENGTH_EXCEEDS_THRESHOLD` (the token estimate is approximate), the gateway shrinks the budget and retries up to `PAYLOAD_SIZE_MAX_RETRIES` times before surfacing the error, so a single oversized turn no longer hard-stops the calling agent.
 
 Tool arguments are never compacted. Tools like `WebFetch` and `WebSearch` return ephemeral data and are not selectively rewritten.
 
@@ -790,7 +792,21 @@ MAX_TOOL_RESULT_CONTENT_LENGTH=150000
 # Protects against large single-message requests such as security monitors
 # sending full conversation transcripts as context.
 MAX_CURRENT_MESSAGE_LENGTH=180000
+
+# Fraction of the model context window reserved for input tokens (default: 0.85).
+# History is trimmed so estimated input tokens stay within this budget minus the
+# request's max_tokens. Clamped to (0, 1]; invalid values fall back to 0.85.
+INPUT_TOKEN_BUDGET_RATIO=0.85
+
+# Never trim the conversation below this many input tokens (default: 8000).
+MIN_INPUT_TOKEN_BUDGET=8000
+
+# Extra send attempts after a CONTENT_LENGTH_EXCEEDS_THRESHOLD rejection
+# (default: 2 → up to 3 total attempts). Set to 0 to disable retries.
+PAYLOAD_SIZE_MAX_RETRIES=2
 ```
+
+> **Note on agent harnesses (e.g. Pi):** the gateway self-limits so it works with any client, but you should also reduce what the harness sends — set a realistic `max_tokens` (input + output must fit the ~200k-token window) and enable the harness's own context compaction / history limit. All Claude models exposed via Kiro report a 200k-token input window, so there is no larger-window escape hatch.
 
 ---
 

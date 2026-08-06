@@ -70,11 +70,20 @@ type Config struct {
 	ToolDescriptionMaxLength   int
 	MaxToolResultContentLength int
 	MaxCurrentMessageLength    int
-	ModelCacheTTL            time.Duration
-	DefaultMaxInputTokens    int
-	MaxRetries               int
-	BaseRetryDelay           time.Duration
-	TokenRefreshThreshold    time.Duration
+	ModelCacheTTL              time.Duration
+	DefaultMaxInputTokens      int
+	MaxRetries                 int
+	BaseRetryDelay             time.Duration
+	TokenRefreshThreshold      time.Duration
+
+	// Input-token budgeting (proactive payload-size control). The gateway
+	// trims oldest history so the estimated input tokens stay within
+	// InputTokenBudgetRatio × model context window, minus a reserve for the
+	// completion. This keeps requests under the Kiro API's
+	// CONTENT_LENGTH_EXCEEDS_THRESHOLD limit.
+	InputTokenBudgetRatio float64 // fraction of the context window reserved for input (0<r<=1)
+	MinInputTokenBudget   int     // never trim below this many input tokens
+	PayloadSizeMaxRetries int     // extra send attempts after a content-length rejection
 
 	// ACP backend
 	BackendMode        string
@@ -157,6 +166,18 @@ func Load() (*Config, error) {
 	cfg.MaxRetries = envInt("MAX_RETRIES", 3)
 	cfg.BaseRetryDelay = time.Duration(envFloat("BASE_RETRY_DELAY", 1.0)*1000) * time.Millisecond
 	cfg.TokenRefreshThreshold = time.Duration(envInt("TOKEN_REFRESH_THRESHOLD", 600)) * time.Second
+
+	// Input-token budgeting. Ratio is clamped to (0, 1]; an out-of-range or
+	// unparseable value falls back to the 0.85 default.
+	cfg.InputTokenBudgetRatio = envFloat("INPUT_TOKEN_BUDGET_RATIO", 0.85)
+	if cfg.InputTokenBudgetRatio <= 0 || cfg.InputTokenBudgetRatio > 1 {
+		cfg.InputTokenBudgetRatio = 0.85
+	}
+	cfg.MinInputTokenBudget = envInt("MIN_INPUT_TOKEN_BUDGET", 8000)
+	cfg.PayloadSizeMaxRetries = envInt("PAYLOAD_SIZE_MAX_RETRIES", 2)
+	if cfg.PayloadSizeMaxRetries < 0 {
+		cfg.PayloadSizeMaxRetries = 0
+	}
 
 	cfg.Version = "1.0"
 	cfg.Title = "Go Kiro Gateway"

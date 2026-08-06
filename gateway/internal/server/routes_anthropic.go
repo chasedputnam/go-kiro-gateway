@@ -23,7 +23,6 @@ import (
 	gwerrors "github.com/chasedputnam/go-kiro-gateway/gateway/internal/errors"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/streaming"
-	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/tokenizer"
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/truncation"
 )
 
@@ -117,7 +116,11 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	payloadResult, err := converter.BuildKiroPayload(converter.BuildKiroPayloadOptions{
+	// Pre-validate payload construction (tool-name limits, message shape).
+	// The actual — and possibly history-trimmed — payload is rebuilt inside
+	// completeWithSizeRecovery. These validation errors do not depend on
+	// trimming, so surfacing them here preserves the 400 semantics.
+	if _, err := converter.BuildKiroPayload(converter.BuildKiroPayloadOptions{
 		Messages:       converted.Messages,
 		SystemPrompt:   converted.SystemPrompt,
 		ModelID:        modelID,
@@ -127,8 +130,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		InjectThinking: true,
 		Thinking:       thinkingConfig,
 		Cfg:            s.config,
-	})
-	if err != nil {
+	}); err != nil {
 		log.Error().Err(err).Msg("Payload build error")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -137,73 +139,74 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Estimate input tokens from the request messages, tools, and system prompt.
-	inputTokens := tokenizer.EstimatePromptTokensFromMessages(converted.Messages, converted.Tools) +
-		tokenizer.CountTokens(converted.SystemPrompt)
-
-	// Log the Kiro request body for debug.
-	if kiroBody, err := json.Marshal(payloadResult.Payload); err == nil {
-		s.debugLogger.LogKiroRequestBody(kiroBody)
-	}
-
-	// Build Kiro API URL.
+	// Build Kiro API URL and stream options.
 	kiroURL := s.auth.APIHost() + "/generateAssistantResponse"
-
-	// Get max input tokens for the model.
 	maxInputTokens := s.cache.GetMaxInputTokens(modelID)
-
-	// Stream options.
 	streamOpts := streaming.DefaultStreamOptions(s.config)
 
+	// Build the payload within an input-token budget and send it: trims oldest
+	// history proactively and retries on CONTENT_LENGTH_EXCEEDS_THRESHOLD.
+	events, inputTokens, err := s.completeWithSizeRecovery(r.Context(), sizeRecoveryParams{
+		Messages:       converted.Messages,
+		SystemPrompt:   converted.SystemPrompt,
+		Tools:          converted.Tools,
+		ModelID:        modelID,
+		ConversationID: conversationID,
+		ProfileARN:     profileARN,
+		InjectThinking: true,
+		Thinking:       thinkingConfig,
+		Model:          req.Model,
+		KiroURL:        kiroURL,
+		Stream:         req.Stream,
+		StreamOpts:     streamOpts,
+		MaxInputTokens: maxInputTokens,
+		ReserveTokens:  req.MaxTokens,
+	})
+	if err != nil {
+		s.writeAnthropicUpstreamError(w, err, start)
+		return
+	}
+
 	if req.Stream {
-		s.handleAnthropicStreaming(w, r, payloadResult.Payload, kiroURL, req.Model, maxInputTokens, inputTokens, streamOpts, start)
+		s.handleAnthropicStreaming(w, events, req.Model, maxInputTokens, inputTokens, streamOpts, start)
 	} else {
-		s.handleAnthropicNonStreaming(w, r, payloadResult.Payload, kiroURL, req.Model, maxInputTokens, inputTokens, streamOpts, start)
+		s.handleAnthropicNonStreaming(w, events, req.Model, maxInputTokens, inputTokens, streamOpts, start)
 	}
 }
 
-// handleAnthropicStreaming handles streaming messages requests.
+// writeAnthropicUpstreamError writes an Anthropic-format error response for a
+// failed upstream request. It forwards the upstream status for *HTTPError and
+// returns 502 for transport-level errors, matching the previous behaviour.
+func (s *Server) writeAnthropicUpstreamError(w http.ResponseWriter, err error, start time.Time) {
+	duration := time.Since(start)
+	var httpErr *backendpkg.HTTPError
+	if errors.As(err, &httpErr) {
+		log.Warn().Int("status", httpErr.StatusCode).Dur("duration", duration).Str("error", truncateString(httpErr.Body, 100)).Msg("POST /v1/messages - upstream error")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(httpErr.StatusCode)
+		w.Write(gwerrors.AnthropicErrorResponse(httpErr.Body, "api_error"))
+		s.debugLogger.FlushOnError(httpErr.StatusCode, httpErr.Body)
+		return
+	}
+	log.Error().Err(err).Dur("duration", duration).Msg("HTTP 502 - POST /v1/messages")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadGateway)
+	w.Write(gwerrors.AnthropicErrorResponse(err.Error(), "api_error"))
+	s.debugLogger.FlushOnError(http.StatusBadGateway, err.Error())
+}
+
+// handleAnthropicStreaming streams the given Kiro events to the client in
+// Anthropic SSE format. The upstream request has already been sent by
+// completeWithSizeRecovery.
 func (s *Server) handleAnthropicStreaming(
 	w http.ResponseWriter,
-	r *http.Request,
-	payload map[string]any,
-	kiroURL string,
+	events <-chan streaming.KiroEvent,
 	model string,
 	maxInputTokens int,
 	inputTokens int,
 	streamOpts streaming.StreamOptions,
 	start time.Time,
 ) {
-	ctx := r.Context()
-
-	events, err := s.backend.Complete(ctx, &backendpkg.Request{
-		Payload:        payload,
-		Model:          model,
-		Stream:         true,
-		ProfileARN:     s.auth.ProfileARN(),
-		KiroURL:        kiroURL,
-		MaxInputTokens: maxInputTokens,
-		StreamOpts:     streamOpts,
-	})
-	if err != nil {
-		duration := time.Since(start)
-		var httpErr *backendpkg.HTTPError
-		if errors.As(err, &httpErr) {
-			log.Warn().Int("status", httpErr.StatusCode).Dur("duration", duration).Str("error", truncateString(httpErr.Body, 100)).Msg("POST /v1/messages - upstream error (streaming)")
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(httpErr.StatusCode)
-			w.Write(gwerrors.AnthropicErrorResponse(httpErr.Body, "api_error"))
-			s.debugLogger.FlushOnError(httpErr.StatusCode, httpErr.Body)
-			return
-		}
-		log.Error().Err(err).Dur("duration", duration).Msg("HTTP 502 - POST /v1/messages (streaming)")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		w.Write(gwerrors.AnthropicErrorResponse(err.Error(), "api_error"))
-		s.debugLogger.FlushOnError(http.StatusBadGateway, err.Error())
-		return
-	}
-
 	anthropicOpts := streaming.AnthropicStreamOptions{
 		Model:                model,
 		ThinkingHandlingMode: streamOpts.ThinkingHandlingMode,
@@ -233,48 +236,18 @@ func (s *Server) handleAnthropicStreaming(
 	s.debugLogger.DiscardBuffers()
 }
 
-// handleAnthropicNonStreaming handles non-streaming messages requests.
+// handleAnthropicNonStreaming collects the given Kiro events into a single
+// Anthropic response. The upstream request has already been sent by
+// completeWithSizeRecovery.
 func (s *Server) handleAnthropicNonStreaming(
 	w http.ResponseWriter,
-	r *http.Request,
-	payload map[string]any,
-	kiroURL string,
+	events <-chan streaming.KiroEvent,
 	model string,
 	maxInputTokens int,
 	inputTokens int,
 	streamOpts streaming.StreamOptions,
 	start time.Time,
 ) {
-	ctx := r.Context()
-
-	events, err := s.backend.Complete(ctx, &backendpkg.Request{
-		Payload:        payload,
-		Model:          model,
-		Stream:         false,
-		ProfileARN:     s.auth.ProfileARN(),
-		KiroURL:        kiroURL,
-		MaxInputTokens: maxInputTokens,
-		StreamOpts:     streamOpts,
-	})
-	if err != nil {
-		duration := time.Since(start)
-		var httpErr *backendpkg.HTTPError
-		if errors.As(err, &httpErr) {
-			log.Warn().Int("status", httpErr.StatusCode).Dur("duration", duration).Str("error", truncateString(httpErr.Body, 100)).Msg("POST /v1/messages - upstream error (non-streaming)")
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(httpErr.StatusCode)
-			w.Write(gwerrors.AnthropicErrorResponse(httpErr.Body, "api_error"))
-			s.debugLogger.FlushOnError(httpErr.StatusCode, httpErr.Body)
-			return
-		}
-		log.Error().Err(err).Dur("duration", duration).Msg("HTTP 502 - POST /v1/messages (non-streaming)")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		w.Write(gwerrors.AnthropicErrorResponse(err.Error(), "api_error"))
-		s.debugLogger.FlushOnError(http.StatusBadGateway, err.Error())
-		return
-	}
-
 	collected := streaming.CollectFullResponse(events)
 
 	anthropicResp := streaming.BuildAnthropicResponse(collected, streaming.AnthropicNonStreamOptions{
