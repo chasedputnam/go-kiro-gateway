@@ -20,12 +20,24 @@ updates:
       - "dependencies"
       - "docker"
 
+  # gateway/Dockerfile is built by gateway/docker-compose.yml and is a separate
+  # manifest from the root Dockerfile, so it needs its own entry.
+  - package-ecosystem: "docker"
+    directory: "/gateway"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
     labels:
       - "dependencies"
       - "github-actions"
