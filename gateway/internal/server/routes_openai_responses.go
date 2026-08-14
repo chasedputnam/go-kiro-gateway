@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -109,6 +110,13 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	customToolNames := make(map[string]bool)
+	for _, tool := range converted.Tools {
+		if tool.Kind == "custom" {
+			customToolNames[tool.Name] = true
+		}
+	}
+
 	// Resolve model name.
 	resolution := s.resolver.Resolve(req.Model)
 	modelID := resolution.InternalID
@@ -171,9 +179,9 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		s.handleResponsesStreaming(w, events, req.Model, maxInputTokens, inputTokens, streamOpts, start)
+		s.handleResponsesStreaming(w, events, req.Model, maxInputTokens, inputTokens, streamOpts, customToolNames, start)
 	} else {
-		s.handleResponsesNonStreaming(w, events, req.Model, maxInputTokens, inputTokens, streamOpts, start)
+		s.handleResponsesNonStreaming(w, events, req.Model, maxInputTokens, inputTokens, streamOpts, customToolNames, start)
 	}
 }
 
@@ -206,6 +214,7 @@ func (s *Server) handleResponsesStreaming(
 	maxInputTokens int,
 	inputTokens int,
 	streamOpts streaming.StreamOptions,
+	customToolNames map[string]bool,
 	start time.Time,
 ) {
 	responsesOpts := streaming.ResponsesStreamOptions{
@@ -213,6 +222,7 @@ func (s *Server) handleResponsesStreaming(
 		ThinkingHandlingMode: streamOpts.ThinkingHandlingMode,
 		MaxInputTokens:       maxInputTokens,
 		InputTokens:          inputTokens,
+		CustomToolNames:      customToolNames,
 	}
 
 	truncatedCalls := streaming.StreamToResponses(w, events, responsesOpts)
@@ -246,14 +256,16 @@ func (s *Server) handleResponsesNonStreaming(
 	maxInputTokens int,
 	inputTokens int,
 	streamOpts streaming.StreamOptions,
+	customToolNames map[string]bool,
 	start time.Time,
 ) {
 	collected := streaming.CollectFullResponse(events)
 
 	responsesResp := streaming.BuildResponsesResponse(collected, streaming.ResponsesNonStreamOptions{
-		Model:          model,
-		MaxInputTokens: maxInputTokens,
-		InputTokens:    inputTokens,
+		Model:           model,
+		MaxInputTokens:  maxInputTokens,
+		InputTokens:     inputTokens,
+		CustomToolNames: customToolNames,
 	})
 
 	if s.config.TruncationRecovery {
@@ -285,10 +297,9 @@ func (s *Server) handleResponsesNonStreaming(
 // Truncation recovery for Responses API input items
 // ---------------------------------------------------------------------------
 
-// applyResponsesTruncationRecovery inspects function_call_output items in the
-// input array and prepends a recovery notice to their output field when the
-// call_id matches a saved truncation. This mirrors the tool-message truncation
-// path in applyOpenAITruncationRecovery.
+// applyResponsesTruncationRecovery inspects function and custom tool output
+// items and prepends a recovery notice when the call_id matches a saved
+// truncation. This mirrors the tool-message path in applyOpenAITruncationRecovery.
 func (s *Server) applyResponsesTruncationRecovery(input any) any {
 	rawItems, ok := input.([]any)
 	if !ok {
@@ -305,12 +316,12 @@ func (s *Server) applyResponsesTruncationRecovery(input any) any {
 		}
 
 		itemType, _ := item["type"].(string)
-		if itemType == "function_call_output" {
+		if itemType == "function_call_output" || itemType == "custom_tool_call_output" {
 			callID, _ := item["call_id"].(string)
 			if callID != "" {
 				info := s.truncState.GetToolTruncation(callID)
 				if info != nil {
-					output, _ := item["output"].(string)
+					output := responsesOutputText(item["output"])
 					modified := truncation.PrependToolResultNotice(output)
 					// Clone the item to avoid mutating the original.
 					newItem := make(map[string]any, len(item))
@@ -320,7 +331,7 @@ func (s *Server) applyResponsesTruncationRecovery(input any) any {
 					newItem["output"] = modified
 					result = append(result, newItem)
 					toolResultsModified++
-					log.Debug().Str("call_id", callID).Msg("Modified function_call_output with truncation notice")
+					log.Debug().Str("call_id", callID).Str("type", itemType).Msg("Modified Responses tool output with truncation notice")
 					continue
 				}
 			}
@@ -332,6 +343,32 @@ func (s *Server) applyResponsesTruncationRecovery(input any) any {
 		log.Info().Int("tool_results_modified", toolResultsModified).Msg("Responses API truncation recovery applied")
 	}
 	return result
+}
+
+func responsesOutputText(output any) string {
+	switch value := output.(type) {
+	case nil:
+		return ""
+	case string:
+		return value
+	case []any:
+		var text strings.Builder
+		for _, block := range value {
+			if object, ok := block.(map[string]any); ok {
+				if part, ok := object["text"].(string); ok {
+					text.WriteString(part)
+				}
+			}
+		}
+		if text.Len() > 0 {
+			return text.String()
+		}
+	}
+	encoded, err := json.Marshal(output)
+	if err != nil {
+		return fmt.Sprint(output)
+	}
+	return string(encoded)
 }
 
 // ---------------------------------------------------------------------------

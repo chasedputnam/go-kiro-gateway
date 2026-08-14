@@ -2,6 +2,7 @@ package converter
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/chasedputnam/go-kiro-gateway/gateway/internal/models"
@@ -152,6 +153,9 @@ func TestConvertResponsesRequest_FunctionCallItem(t *testing.T) {
 	}
 	if fn["name"] != "get_weather" {
 		t.Errorf("tool call name = %v, want get_weather", fn["name"])
+	}
+	if tc["id"] != "call_123" {
+		t.Errorf("tool call id = %v, want call_123", tc["id"])
 	}
 }
 
@@ -409,6 +413,154 @@ func TestConvertResponsesRequest_ToolConversion(t *testing.T) {
 	}
 	if tool.InputSchema == nil {
 		t.Error("InputSchema should not be nil")
+	}
+}
+
+func TestConvertResponsesRequest_AdditionalTools(t *testing.T) {
+	items := []models.InputItem{
+		{
+			Type: "additional_tools",
+			Role: "developer",
+			Tools: []models.ResponsesTool{
+				{
+					Type: "namespace",
+					Name: "functions",
+					Tools: []models.ResponsesTool{
+						{Type: "custom", Name: "exec", Description: "Run code"},
+						{
+							Type:        "function",
+							Name:        "wait",
+							Description: "Wait for output",
+							Parameters: map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"cell_id": map[string]any{"type": "string"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{Type: "message", Role: "user", Content: "inspect the repository"},
+	}
+
+	result, err := ConvertResponsesRequest(models.ResponsesRequest{
+		Model: "gpt-5.6-terra",
+		Input: inputItems(items),
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Messages) != 1 {
+		t.Fatalf("expected only the conversational message, got %d", len(result.Messages))
+	}
+	if len(result.Tools) != 2 {
+		t.Fatalf("expected 2 flattened tools, got %d", len(result.Tools))
+	}
+	if result.Tools[0].Name != "exec" || result.Tools[0].Kind != "custom" {
+		t.Fatalf("custom tool = %+v, want exec/custom", result.Tools[0])
+	}
+	if required, ok := result.Tools[0].InputSchema["required"].([]string); !ok || len(required) != 1 || required[0] != "input" {
+		t.Fatalf("custom tool schema does not require input: %#v", result.Tools[0].InputSchema)
+	}
+	if result.Tools[1].Name != "wait" || result.Tools[1].Kind != "" {
+		t.Fatalf("function tool = %+v, want wait/function", result.Tools[1])
+	}
+}
+
+func TestConvertResponsesRequest_CustomToolCallHistory(t *testing.T) {
+	items := []models.InputItem{
+		{Type: "custom_tool_call", ID: "ctc_1", CallID: "call_1", Name: "exec", Input: "return 2 + 2"},
+		{Type: "custom_tool_call_output", CallID: "call_1", Output: "4"},
+	}
+
+	result, err := ConvertResponsesRequest(models.ResponsesRequest{
+		Model: "gpt-5.6-terra",
+		Input: inputItems(items),
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Messages) != 2 {
+		t.Fatalf("expected call and result messages, got %d", len(result.Messages))
+	}
+	call := result.Messages[0].ToolCalls[0]
+	if call["id"] != "call_1" {
+		t.Fatalf("tool call id = %v, want call_1", call["id"])
+	}
+	fn := call["function"].(map[string]any)
+	if fn["arguments"] != `{"input":"return 2 + 2"}` {
+		t.Fatalf("wrapped custom input = %v", fn["arguments"])
+	}
+	if got := result.Messages[1].ToolResults[0]["tool_use_id"]; got != "call_1" {
+		t.Fatalf("tool result id = %v, want call_1", got)
+	}
+}
+
+func TestConvertResponsesRequest_DeduplicatesCustomCallLifecycleAndArrayOutput(t *testing.T) {
+	items := []models.InputItem{
+		{Type: "additional_tools", Tools: []models.ResponsesTool{
+			{Type: "custom", Name: "exec", Description: "Run code"},
+		}},
+		{Type: "custom_tool_call", ID: "ctc_done", CallID: "call_1", Name: "exec", Input: "return 2 + 2"},
+		{Type: "custom_tool_call", ID: "ctc_added", CallID: "call_1", Name: "exec", Input: ""},
+		{Type: "message", Role: "assistant", Content: "I'll inspect that."},
+		{Type: "custom_tool_call_output", CallID: "call_1", Output: []any{
+			map[string]any{"type": "input_text", "text": "Script completed\n"},
+			map[string]any{"type": "input_text", "text": "4"},
+		}},
+		{Type: "custom_tool_call_output", CallID: "call_1", Output: "duplicate execution error"},
+	}
+
+	result, err := ConvertResponsesRequest(models.ResponsesRequest{
+		Model: "gpt-5.6-terra",
+		Input: inputItems(items),
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Messages) != 3 {
+		t.Fatalf("expected call, assistant text, and result messages, got %d", len(result.Messages))
+	}
+	if len(result.Messages[0].ToolCalls) != 1 {
+		t.Fatalf("expected one deduplicated call, got %d", len(result.Messages[0].ToolCalls))
+	}
+	fn := result.Messages[0].ToolCalls[0]["function"].(map[string]any)
+	if fn["arguments"] != `{"input":"return 2 + 2"}` {
+		t.Fatalf("deduplicated call arguments = %v", fn["arguments"])
+	}
+	if len(result.Messages[2].ToolResults) != 1 {
+		t.Fatalf("expected one coalesced result, got %d", len(result.Messages[2].ToolResults))
+	}
+	content, _ := result.Messages[2].ToolResults[0]["content"].(string)
+	if !strings.Contains(content, "Script completed\n4") || !strings.Contains(content, "duplicate execution error") {
+		t.Fatalf("coalesced result content = %q", content)
+	}
+
+	payload, err := BuildKiroPayload(BuildKiroPayloadOptions{
+		Messages:       result.Messages,
+		Tools:          result.Tools,
+		ModelID:        "gpt-5.6-terra",
+		ConversationID: "conv_1",
+		InjectThinking: false,
+		Cfg:            testCfg(),
+	})
+	if err != nil {
+		t.Fatalf("build Kiro payload: %v", err)
+	}
+	state := payload.Payload["conversationState"].(map[string]any)
+	history := state["history"].([]map[string]any)
+	lastAssistant := history[len(history)-1]["assistantResponseMessage"].(map[string]any)
+	uses := lastAssistant["toolUses"].([]map[string]any)
+	if len(uses) != 1 || uses[0]["toolUseId"] != "call_1" {
+		t.Fatalf("Kiro tool uses = %#v", uses)
+	}
+	current := state["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+	context := current["userInputMessageContext"].(map[string]any)
+	results := context["toolResults"].([]map[string]any)
+	if len(results) != 1 || results[0]["toolUseId"] != "call_1" {
+		t.Fatalf("Kiro tool results = %#v", results)
 	}
 }
 

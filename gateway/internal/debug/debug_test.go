@@ -299,6 +299,40 @@ func TestMiddleware_SkipsNonAPIEndpoints(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Middleware works for OpenAI Responses endpoint
+// ---------------------------------------------------------------------------
+
+func TestMiddleware_ResponsesEndpoint(t *testing.T) {
+	recorder := &recordingLogger{}
+	mw := Middleware(recorder)
+
+	var downstreamBody []byte
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		downstreamBody, err = readAll(r.Body)
+		if err != nil {
+			t.Fatalf("downstream read failed: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	body := `{"model":"gpt-5.6-terra","input":[{"type":"additional_tools"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if !recorder.preparedCalled {
+		t.Error("PrepareNewRequest should have been called for /v1/responses")
+	}
+	if string(recorder.requestBody) != body {
+		t.Errorf("logged request body = %q, want %q", recorder.requestBody, body)
+	}
+	if string(downstreamBody) != body {
+		t.Errorf("downstream body = %q, want original body %q", downstreamBody, body)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Middleware works for Anthropic endpoint
 // ---------------------------------------------------------------------------
 
