@@ -544,6 +544,71 @@ VPN_PROXY_URL=192.168.1.100:8080
 
 ## Configuring Tools
 
+### Codex app
+
+Codex uses the OpenAI Responses API. Complete the [Quick Start](#quick-start) and [Configuration](#configuration) steps first, then make sure the gateway is running in Responses mode. The mode defaults to `responses`, but setting it explicitly avoids conflicts with an existing configuration:
+
+```env
+SERVER_HOST="127.0.0.1"
+PROXY_API_KEY="my-super-secret-password-123"
+OPENAI_API_MODE="responses"
+```
+
+Start the gateway and verify both its health and the models available to your Kiro account:
+
+```bash
+./go-kiro-gateway
+
+curl http://localhost:8000/health
+curl http://localhost:8000/v1/models \
+  -H "Authorization: Bearer my-super-secret-password-123"
+```
+
+Expose the same proxy key to Codex under a dedicated environment variable:
+
+```bash
+export KIRO_GATEWAY_API_KEY="my-super-secret-password-123"
+```
+
+Then add the following to the Codex configuration file at `~/.codex/config.toml` (or `%USERPROFILE%\.codex\config.toml` on Windows):
+
+```toml
+model = "gpt-5.6-terra"
+model_provider = "kiro-gateway"
+
+[model_providers.kiro-gateway]
+name = "Go Kiro Gateway"
+base_url = "http://localhost:8000/v1"
+wire_api = "responses"
+env_key = "KIRO_GATEWAY_API_KEY"
+requires_openai_auth = false
+```
+
+Replace `gpt-5.6-terra` with another GPT-5.6 model ID returned by `/v1/models` if desired. The provider's `base_url` must include `/v1`, and `wire_api` must remain `"responses"`.
+
+Fully quit and reopen Codex after changing the configuration. The environment variable must be available to the Codex app process.
+
+#### macOS Dock launches
+
+Shell exports are not inherited when an app is launched from the macOS Dock. Set the key for the current macOS login session, then reopen Codex:
+
+```bash
+launchctl setenv KIRO_GATEWAY_API_KEY "my-super-secret-password-123"
+```
+
+Remove it from the macOS login session when it is no longer needed:
+
+```bash
+launchctl unsetenv KIRO_GATEWAY_API_KEY
+```
+
+If Codex cannot connect:
+
+- **401 Unauthorized** — `KIRO_GATEWAY_API_KEY` does not match the gateway's `PROXY_API_KEY`, or Codex did not inherit it.
+- **404 from `/v1/responses`** — set `OPENAI_API_MODE="responses"` and restart the gateway.
+- **Connection refused** — confirm the gateway port matches `base_url` and check `/health`.
+- **Model unavailable** — select a compatible model currently returned by `/v1/models`.
+
 ### Claude Code (ENV VAR)
 
 Exporting the `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` environment variables will setup Claude Code to use alternate providers, such as go-kiro-gateway.
