@@ -39,7 +39,7 @@ type ConvertResponsesResult struct {
 //     - "message"              → user or assistant UnifiedMessage
 //     - "function_call"        → assistant message with ToolCalls
 //     - "function_call_output" → accumulated and flushed as a user message
-//                                with ToolResults (same pattern as openai.go)
+//     with ToolResults (same pattern as openai.go)
 //  3. `instructions` — used as the system prompt.
 //  4. `tools` — converted to UnifiedTool values.
 //
@@ -48,7 +48,10 @@ type ConvertResponsesResult struct {
 func ConvertResponsesRequest(req models.ResponsesRequest, _ *config.Config) (*ConvertResponsesResult, error) {
 	systemPrompt := strings.TrimSpace(req.Instructions)
 	messages := convertResponsesInput(req.Input)
-	tools := convertResponsesTools(req.Tools)
+	tools := mergeResponsesTools(
+		convertResponsesTools(req.Tools),
+		convertResponsesAdditionalTools(req.Input),
+	)
 
 	return &ConvertResponsesResult{
 		Messages:     messages,
@@ -106,9 +109,79 @@ func convertResponsesInput(input any) []UnifiedMessage {
 	return convertInputItemSlice(items)
 }
 
+// normalizeResponsesToolItems collapses duplicate lifecycle representations
+// of the same call. Codex may retain both response.output_item.* and the copy
+// inside response.completed when their item IDs differ. Kiro requires exactly
+// one tool use and one matching result per toolUseId.
+func normalizeResponsesToolItems(items []models.InputItem) []models.InputItem {
+	if len(items) == 0 {
+		return nil
+	}
+
+	normalized := make([]models.InputItem, 0, len(items))
+	callIndexes := make(map[string]int)
+	outputIndexes := make(map[string]int)
+
+	for _, item := range items {
+		switch item.Type {
+		case "function_call", "custom_tool_call":
+			key := item.CallID
+			if key == "" {
+				key = item.ID
+			}
+			if key != "" {
+				if index, exists := callIndexes[key]; exists {
+					existing := normalized[index]
+					if responsesToolCallPayloadEmpty(existing) && !responsesToolCallPayloadEmpty(item) {
+						normalized[index] = item
+					}
+					continue
+				}
+				callIndexes[key] = len(normalized)
+			}
+
+		case "function_call_output", "custom_tool_call_output":
+			if item.CallID != "" {
+				if index, exists := outputIndexes[item.CallID]; exists {
+					existing := normalized[index]
+					existing.Output = mergeResponsesToolOutputs(existing.Output, item.Output)
+					normalized[index] = existing
+					continue
+				}
+				outputIndexes[item.CallID] = len(normalized)
+			}
+		}
+
+		normalized = append(normalized, item)
+	}
+	return normalized
+}
+
+func responsesToolCallPayloadEmpty(item models.InputItem) bool {
+	if item.Type == "custom_tool_call" {
+		return item.Input == ""
+	}
+	return item.Arguments == ""
+}
+
+func mergeResponsesToolOutputs(left, right any) string {
+	leftText := extractTextFromAny(left)
+	rightText := extractTextFromAny(right)
+	switch {
+	case leftText == "":
+		return rightText
+	case rightText == "" || rightText == leftText:
+		return leftText
+	default:
+		return leftText + "\n\n" + rightText
+	}
+}
+
 // convertInputItemSlice converts a typed slice of InputItem values using the
 // same pending-tool-results flush loop pattern as openai.go.
 func convertInputItemSlice(items []models.InputItem) []UnifiedMessage {
+	items = normalizeResponsesToolItems(items)
+
 	var (
 		processed          []UnifiedMessage
 		pendingToolResults []map[string]any
@@ -134,14 +207,12 @@ func convertInputItemSlice(items []models.InputItem) []UnifiedMessage {
 
 	for _, item := range items {
 		switch item.Type {
-		case "function_call_output":
+		case "function_call_output", "custom_tool_call_output":
 			// Tool result — accumulate until the next non-tool-result item.
-			content := item.Output
+			content := extractTextFromAny(item.Output)
 			if content == "" {
 				content = "(empty result)"
 			}
-			// Apply MAX_TOOL_RESULT_CONTENT_LENGTH truncation by reusing the
-			// same extractToolResultContent helper (it handles empty → placeholder).
 			tr := map[string]any{
 				"type":        "tool_result",
 				"tool_use_id": item.CallID,
@@ -149,15 +220,24 @@ func convertInputItemSlice(items []models.InputItem) []UnifiedMessage {
 			}
 			pendingToolResults = append(pendingToolResults, tr)
 
-		case "function_call":
+		case "function_call", "custom_tool_call":
 			// Assistant tool call from history — flush pending tool results first.
 			flushPending()
+			toolUseID := item.CallID
+			if toolUseID == "" {
+				toolUseID = item.ID
+			}
+			arguments := item.Arguments
+			if item.Type == "custom_tool_call" {
+				wrapped, _ := json.Marshal(map[string]any{"input": item.Input})
+				arguments = string(wrapped)
+			}
 			tcMap := map[string]any{
-				"id":   item.ID,
+				"id":   toolUseID,
 				"type": "function",
 				"function": map[string]any{
 					"name":      item.Name,
-					"arguments": item.Arguments,
+					"arguments": arguments,
 				},
 			}
 			processed = append(processed, UnifiedMessage{
@@ -171,6 +251,10 @@ func convertInputItemSlice(items []models.InputItem) []UnifiedMessage {
 			flushPending()
 			um := convertResponsesMessageItem(item)
 			processed = append(processed, um)
+
+		case "additional_tools":
+			// Metadata only. Tool definitions are extracted separately by
+			// convertResponsesAdditionalTools and are not conversation messages.
 
 		default:
 			// Unknown item type — skip with a warning for forward compatibility.
@@ -256,30 +340,118 @@ func convertResponsesMessageItem(item models.InputItem) UnifiedMessage {
 // Tool conversion
 // ---------------------------------------------------------------------------
 
+// convertResponsesAdditionalTools extracts Codex's per-request tool inventory
+// from input items of type "additional_tools".
+func convertResponsesAdditionalTools(input any) []UnifiedTool {
+	var definitions []models.ResponsesTool
+
+	switch items := input.(type) {
+	case []models.InputItem:
+		for _, item := range items {
+			if item.Type == "additional_tools" {
+				definitions = append(definitions, item.Tools...)
+			}
+		}
+	case []any:
+		for _, raw := range items {
+			b, err := json.Marshal(raw)
+			if err != nil {
+				continue
+			}
+			var item models.InputItem
+			if err := json.Unmarshal(b, &item); err != nil {
+				continue
+			}
+			if item.Type == "additional_tools" {
+				definitions = append(definitions, item.Tools...)
+			}
+		}
+	}
+
+	return convertResponsesTools(definitions)
+}
+
 // convertResponsesTools converts Responses API tool definitions to the
-// unified UnifiedTool format.
+// unified format. Namespace entries are containers and are recursively
+// flattened because Kiro's tool protocol has no namespace wrapper.
 func convertResponsesTools(tools []models.ResponsesTool) []UnifiedTool {
 	if len(tools) == 0 {
 		return nil
 	}
 
-	out := make([]UnifiedTool, 0, len(tools))
-	for _, t := range tools {
-		if t.Type != "function" {
+	var out []UnifiedTool
+	var appendTool func(models.ResponsesTool)
+	appendTool = func(t models.ResponsesTool) {
+		switch t.Type {
+		case "namespace":
+			for _, child := range t.Tools {
+				appendTool(child)
+			}
+
+		case "function":
+			schema := t.Parameters
+			if schema == nil {
+				schema = map[string]any{}
+			}
+			out = append(out, UnifiedTool{
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: schema,
+			})
+
+		case "custom":
+			// Kiro only accepts JSON-schema tools. Wrap the free-form custom
+			// input in one string property, then unwrap it again when emitting
+			// Responses custom_tool_call events.
+			out = append(out, UnifiedTool{
+				Name:        t.Name,
+				Description: t.Description,
+				Kind:        "custom",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"input": map[string]any{
+							"type":        "string",
+							"description": "Raw free-form input for this custom tool.",
+						},
+					},
+					"required":             []string{"input"},
+					"additionalProperties": false,
+				},
+			})
+
+		default:
 			log.Warn().Str("type", t.Type).Msg("Responses API: unsupported tool type, skipping")
-			continue
 		}
-		schema := t.Parameters
-		if schema == nil {
-			schema = map[string]any{}
-		}
-		out = append(out, UnifiedTool{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: schema,
-		})
 	}
 
+	for _, tool := range tools {
+		appendTool(tool)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// mergeResponsesTools combines top-level and additional tool inventories while
+// retaining the first definition for each client-visible tool name.
+func mergeResponsesTools(groups ...[]UnifiedTool) []UnifiedTool {
+	seen := make(map[string]struct{})
+	var out []UnifiedTool
+	for _, group := range groups {
+		for _, tool := range group {
+			if tool.Name == "" {
+				log.Warn().Msg("Responses API: tool with empty name, skipping")
+				continue
+			}
+			if _, exists := seen[tool.Name]; exists {
+				continue
+			}
+			seen[tool.Name] = struct{}{}
+			out = append(out, tool)
+		}
+	}
 	if len(out) == 0 {
 		return nil
 	}

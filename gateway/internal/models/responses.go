@@ -18,44 +18,52 @@ package models
 // of InputItem objects. The handler unmarshals and inspects the value at
 // runtime.
 type ResponsesRequest struct {
-	Model              string          `json:"model"`
-	Input              any             `json:"input"`                         // string or []InputItem
-	Instructions       string          `json:"instructions,omitempty"`        // system prompt
-	Tools              []ResponsesTool `json:"tools,omitempty"`
-	Stream             bool            `json:"stream,omitempty"`
-	MaxOutputTokens    *int            `json:"max_output_tokens,omitempty"`
-	Temperature        *float64        `json:"temperature,omitempty"`
-	TopP               *float64        `json:"top_p,omitempty"`
+	Model              string           `json:"model"`
+	Input              any              `json:"input"`                  // string or []InputItem
+	Instructions       string           `json:"instructions,omitempty"` // system prompt
+	Tools              []ResponsesTool  `json:"tools,omitempty"`
+	Stream             bool             `json:"stream,omitempty"`
+	MaxOutputTokens    *int             `json:"max_output_tokens,omitempty"`
+	Temperature        *float64         `json:"temperature,omitempty"`
+	TopP               *float64         `json:"top_p,omitempty"`
 	Reasoning          *ReasoningConfig `json:"reasoning,omitempty"`
-	PreviousResponseID string          `json:"previous_response_id,omitempty"` // ignored by gateway (stateless)
-	Metadata           map[string]any  `json:"metadata,omitempty"`
+	PreviousResponseID string           `json:"previous_response_id,omitempty"` // ignored by gateway (stateless)
+	Metadata           map[string]any   `json:"metadata,omitempty"`
 }
 
 // InputItem is a single item in the Responses API `input` array.
 //
 // Type is one of:
-//   - "message"               — a conversational turn (user or assistant)
-//   - "function_call"         — an assistant-side tool invocation from history
-//   - "function_call_output"  — the result of a prior tool call
+//   - "message"                 — a conversational turn (user or assistant)
+//   - "function_call"           — an assistant-side function invocation from history
+//   - "function_call_output"    — the result of a prior function call
+//   - "custom_tool_call"        — an assistant-side custom tool invocation from history
+//   - "custom_tool_call_output" — the result of a prior custom tool call
+//   - "additional_tools"        — Codex's per-request nested tool inventory
 //
 // Fields are shared across types; only the relevant subset is populated for
 // each type value.
 type InputItem struct {
-	Type string `json:"type"` // "message", "function_call", "function_call_output"
+	Type string `json:"type"`
 
 	// message fields
 	ID      string `json:"id,omitempty"`
 	Role    string `json:"role,omitempty"`
 	Content any    `json:"content,omitempty"` // string or []ContentBlock
 
-	// function_call fields
+	// additional_tools fields
+	Tools []ResponsesTool `json:"tools,omitempty"`
+
+	// function_call and custom_tool_call fields
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
+	Input     string `json:"input,omitempty"`
 
-	// function_call_output fields
-	// CallID is shared with function_call above.
-	Output string `json:"output,omitempty"`
+	// function_call_output and custom_tool_call_output fields.
+	// CallID is shared with the call fields above. Output may be a string or
+	// an array of Responses content blocks (as emitted by Codex custom tools).
+	Output any `json:"output,omitempty"`
 }
 
 // ContentBlock is a typed content block within a message's content array.
@@ -74,14 +82,17 @@ type ImageURLBlock struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// ResponsesTool defines a tool that the model may call.
-// Only type "function" is supported.
+// ResponsesTool defines a tool that the model may call. Codex may place these
+// at the top level or recursively inside an input item of type
+// "additional_tools" using namespace, function, and custom tool types.
 type ResponsesTool struct {
-	Type        string         `json:"type"` // "function"
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Parameters  map[string]any `json:"parameters,omitempty"`
-	Strict      *bool          `json:"strict,omitempty"`
+	Type        string          `json:"type"` // "function", "custom", or "namespace"
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  map[string]any  `json:"parameters,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
+	Format      map[string]any  `json:"format,omitempty"`
+	Tools       []ResponsesTool `json:"tools,omitempty"`
 }
 
 // ReasoningConfig controls the model's internal reasoning behaviour.
@@ -121,10 +132,11 @@ type OutputItem struct {
 	Content []OutputContent `json:"content,omitempty"`
 	Status  string          `json:"status,omitempty"` // "completed", "in_progress"
 
-	// function_call fields
+	// function_call and custom_tool_call fields
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
+	Input     string `json:"input,omitempty"`
 
 	// reasoning fields
 	Summary []SummaryContent `json:"summary,omitempty"`
@@ -132,7 +144,7 @@ type OutputItem struct {
 
 // OutputContent is a typed content block within an output message item.
 type OutputContent struct {
-	Type        string `json:"type"`                  // "output_text", "refusal"
+	Type        string `json:"type"` // "output_text", "refusal"
 	Text        string `json:"text,omitempty"`
 	Annotations []any  `json:"annotations,omitempty"`
 }

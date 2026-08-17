@@ -44,6 +44,10 @@ type UnifiedTool struct {
 	Name        string
 	Description string
 	InputSchema map[string]any
+	// Kind is "custom" for free-form Responses tools. Empty means function.
+	// Kiro receives both kinds as JSON-schema tools; Responses output uses Kind
+	// to restore the client-visible custom tool call event shape.
+	Kind string
 }
 
 // KiroPayloadResult is returned by BuildKiroPayload. Payload is the
@@ -378,6 +382,7 @@ func processToolsWithLongDescriptions(tools []UnifiedTool, maxLen int) ([]Unifie
 			Name:        t.Name,
 			Description: fmt.Sprintf("[Full documentation in system prompt under '## Tool: %s']", t.Name),
 			InputSchema: t.InputSchema,
+			Kind:        t.Kind,
 		})
 	}
 
@@ -827,9 +832,13 @@ func ensureAssistantBeforeToolResults(messages []UnifiedMessage) ([]UnifiedMessa
 			continue
 		}
 
-		hasPreceding := len(result) > 0 &&
-			result[len(result)-1].Role == "assistant" &&
-			len(result[len(result)-1].ToolCalls) > 0
+		hasPreceding := false
+		for i := len(result) - 1; i >= 0 && result[i].Role == "assistant"; i-- {
+			if len(result[i].ToolCalls) > 0 {
+				hasPreceding = true
+				break
+			}
+		}
 
 		if hasPreceding {
 			result = append(result, msg)

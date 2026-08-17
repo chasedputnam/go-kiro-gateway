@@ -70,13 +70,18 @@ type ResponsesStreamOptions struct {
 
 	// InputTokens is the pre-calculated input token count.
 	InputTokens int
+
+	// CustomToolNames identifies tools whose Kiro JSON arguments must be
+	// restored to Responses custom_tool_call free-form input events.
+	CustomToolNames map[string]bool
 }
 
 // ResponsesNonStreamOptions configures the non-streaming response builder.
 type ResponsesNonStreamOptions struct {
-	Model          string
-	MaxInputTokens int
-	InputTokens    int
+	Model           string
+	MaxInputTokens  int
+	InputTokens     int
+	CustomToolNames map[string]bool
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +99,47 @@ func writeResponsesEvent(w http.ResponseWriter, flusher http.Flusher, eventType 
 	}
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, b)
 	flusher.Flush()
+}
+
+func isResponsesCustomTool(name string, customToolNames map[string]bool) bool {
+	return customToolNames != nil && customToolNames[name]
+}
+
+func customToolInput(arguments string) string {
+	var wrapped map[string]any
+	if err := json.Unmarshal([]byte(arguments), &wrapped); err != nil {
+		return arguments
+	}
+	if input, ok := wrapped["input"].(string); ok {
+		return input
+	}
+	return arguments
+}
+
+func responsesToolCallItem(itemID, callID, name, arguments string, custom bool) map[string]any {
+	if custom {
+		return map[string]any{
+			"type":    "custom_tool_call",
+			"id":      itemID,
+			"call_id": callID,
+			"name":    name,
+			"input":   customToolInput(arguments),
+		}
+	}
+	return map[string]any{
+		"type":      "function_call",
+		"id":        itemID,
+		"call_id":   callID,
+		"name":      name,
+		"arguments": arguments,
+	}
+}
+
+func responsesToolCallItemID(custom bool) string {
+	if custom {
+		return generateOutputItemID("ctc_")
+	}
+	return generateOutputItemID("fc_")
 }
 
 // ---------------------------------------------------------------------------
@@ -143,16 +189,19 @@ func StreamToResponses(w http.ResponseWriter, events <-chan KiroEvent, opts Resp
 		messageItemID    string
 
 		// Streaming lifecycle for the current tool call.
-		activeToolCallIndex = -1
-		activeToolCallID    string
+		activeToolCallIndex  = -1
+		activeToolCallID     string
 		activeToolCallItemID string
-		activeToolCallName  string
-		activeToolCallArgs  strings.Builder
-		nextOutputIndex     int
+		activeToolCallName   string
+		activeToolCallCustom bool
+		activeToolCallArgs   strings.Builder
+		nextOutputIndex      int
 
-		// Tool call deduplication (same pattern as openai.go).
+		// Tool call deduplication and stable item identity across lifecycle
+		// events and the final response.completed output.
 		streamedToolCallIDs  = make(map[string]struct{})
 		streamedToolCallSigs = make(map[string]struct{})
+		toolCallItemIDs      = make(map[string]string)
 	)
 
 	// finishActiveToolCall closes the current tool call SSE lifecycle.
@@ -161,33 +210,48 @@ func StreamToResponses(w http.ResponseWriter, events <-chan KiroEvent, opts Resp
 			return
 		}
 		args := activeToolCallArgs.String()
-		// function_call_arguments.done
-		writeResponsesEvent(w, flusher, "response.function_call_arguments.done", map[string]any{
-			"type":         "response.function_call_arguments.done",
-			"output_index": activeToolCallIndex,
-			"item_id":      activeToolCallItemID,
-			"arguments":    args,
-		})
-		// output_item.done for this function_call
+		if activeToolCallCustom {
+			input := customToolInput(args)
+			writeResponsesEvent(w, flusher, "response.custom_tool_call_input.delta", map[string]any{
+				"type":         "response.custom_tool_call_input.delta",
+				"output_index": activeToolCallIndex,
+				"item_id":      activeToolCallItemID,
+				"delta":        input,
+			})
+			writeResponsesEvent(w, flusher, "response.custom_tool_call_input.done", map[string]any{
+				"type":         "response.custom_tool_call_input.done",
+				"output_index": activeToolCallIndex,
+				"item_id":      activeToolCallItemID,
+				"input":        input,
+			})
+		} else {
+			writeResponsesEvent(w, flusher, "response.function_call_arguments.done", map[string]any{
+				"type":         "response.function_call_arguments.done",
+				"output_index": activeToolCallIndex,
+				"item_id":      activeToolCallItemID,
+				"arguments":    args,
+			})
+		}
 		writeResponsesEvent(w, flusher, "response.output_item.done", map[string]any{
 			"type":         "response.output_item.done",
 			"output_index": activeToolCallIndex,
-			"item": map[string]any{
-				"type":      "function_call",
-				"id":        activeToolCallItemID,
-				"call_id":   activeToolCallID,
-				"name":      activeToolCallName,
-				"arguments": args,
-			},
+			"item": responsesToolCallItem(
+				activeToolCallItemID,
+				activeToolCallID,
+				activeToolCallName,
+				args,
+				activeToolCallCustom,
+			),
 		})
 		if activeToolCallID != "" {
 			streamedToolCallIDs[activeToolCallID] = struct{}{}
 		}
-		streamedToolCallSigs[toolCallSignature(activeToolCallName, activeToolCallArgs.String())] = struct{}{}
+		streamedToolCallSigs[toolCallSignature(activeToolCallName, args)] = struct{}{}
 		activeToolCallIndex = -1
 		activeToolCallID = ""
 		activeToolCallItemID = ""
 		activeToolCallName = ""
+		activeToolCallCustom = false
 		activeToolCallArgs.Reset()
 	}
 
@@ -256,14 +320,22 @@ func StreamToResponses(w http.ResponseWriter, events <-chan KiroEvent, opts Resp
 			if event.ToolCall == nil {
 				continue
 			}
-			// Finish any prior tool call lifecycle.
+			// Finish any prior tool call lifecycle. Kiro may repeat a start/stop
+			// lifecycle for the same call ID; once streamed, ignore the duplicate
+			// lifecycle so Codex does not execute a second call with empty input.
 			finishActiveToolCall()
+			if event.ToolCall.ID != "" {
+				if _, alreadyStreamed := streamedToolCallIDs[event.ToolCall.ID]; alreadyStreamed {
+					continue
+				}
+			}
 
 			activeToolCallIndex = nextOutputIndex
 			nextOutputIndex++
 			activeToolCallID = event.ToolCall.ID
 			activeToolCallName = event.ToolCall.Name
-			activeToolCallItemID = generateOutputItemID("fc_")
+			activeToolCallCustom = isResponsesCustomTool(activeToolCallName, opts.CustomToolNames)
+			activeToolCallItemID = responsesToolCallItemID(activeToolCallCustom)
 			activeToolCallArgs.Reset()
 
 			callID := activeToolCallID
@@ -271,17 +343,18 @@ func StreamToResponses(w http.ResponseWriter, events <-chan KiroEvent, opts Resp
 				callID = GenerateToolCallID()
 				activeToolCallID = callID
 			}
+			toolCallItemIDs[callID] = activeToolCallItemID
 
 			writeResponsesEvent(w, flusher, "response.output_item.added", map[string]any{
 				"type":         "response.output_item.added",
 				"output_index": activeToolCallIndex,
-				"item": map[string]any{
-					"type":      "function_call",
-					"id":        activeToolCallItemID,
-					"call_id":   callID,
-					"name":      activeToolCallName,
-					"arguments": "",
-				},
+				"item": responsesToolCallItem(
+					activeToolCallItemID,
+					callID,
+					activeToolCallName,
+					"",
+					activeToolCallCustom,
+				),
 			})
 
 		case EventTypeToolCallDelta:
@@ -289,6 +362,11 @@ func StreamToResponses(w http.ResponseWriter, events <-chan KiroEvent, opts Resp
 				continue
 			}
 			activeToolCallArgs.WriteString(event.ToolCall.Arguments)
+			if activeToolCallCustom {
+				// Kiro streams the JSON wrapper in fragments. Buffer it and emit
+				// the unwrapped free-form input when the call is complete.
+				continue
+			}
 			for _, fragment := range splitToolArgumentDelta(event.ToolCall.Arguments) {
 				writeResponsesEvent(w, flusher, "response.function_call_arguments.delta", map[string]any{
 					"type":         "response.function_call_arguments.delta",
@@ -378,47 +456,53 @@ func StreamToResponses(w http.ResponseWriter, events <-chan KiroEvent, opts Resp
 		if wasStreamed(tc) {
 			continue
 		}
-		itemID := generateOutputItemID("fc_")
+		custom := isResponsesCustomTool(tc.Name, opts.CustomToolNames)
+		itemID := responsesToolCallItemID(custom)
 		callID := tc.ID
 		if callID == "" {
 			callID = GenerateToolCallID()
 		}
+		toolCallItemIDs[callID] = itemID
 		idx := nextOutputIndex
 		nextOutputIndex++
 
 		writeResponsesEvent(w, flusher, "response.output_item.added", map[string]any{
 			"type":         "response.output_item.added",
 			"output_index": idx,
-			"item": map[string]any{
-				"type":      "function_call",
-				"id":        itemID,
-				"call_id":   callID,
-				"name":      tc.Name,
-				"arguments": "",
-			},
+			"item":         responsesToolCallItem(itemID, callID, tc.Name, "", custom),
 		})
-		writeResponsesEvent(w, flusher, "response.function_call_arguments.delta", map[string]any{
-			"type":         "response.function_call_arguments.delta",
-			"output_index": idx,
-			"item_id":      itemID,
-			"delta":        tc.Arguments,
-		})
-		writeResponsesEvent(w, flusher, "response.function_call_arguments.done", map[string]any{
-			"type":         "response.function_call_arguments.done",
-			"output_index": idx,
-			"item_id":      itemID,
-			"arguments":    tc.Arguments,
-		})
+		if custom {
+			input := customToolInput(tc.Arguments)
+			writeResponsesEvent(w, flusher, "response.custom_tool_call_input.delta", map[string]any{
+				"type":         "response.custom_tool_call_input.delta",
+				"output_index": idx,
+				"item_id":      itemID,
+				"delta":        input,
+			})
+			writeResponsesEvent(w, flusher, "response.custom_tool_call_input.done", map[string]any{
+				"type":         "response.custom_tool_call_input.done",
+				"output_index": idx,
+				"item_id":      itemID,
+				"input":        input,
+			})
+		} else {
+			writeResponsesEvent(w, flusher, "response.function_call_arguments.delta", map[string]any{
+				"type":         "response.function_call_arguments.delta",
+				"output_index": idx,
+				"item_id":      itemID,
+				"delta":        tc.Arguments,
+			})
+			writeResponsesEvent(w, flusher, "response.function_call_arguments.done", map[string]any{
+				"type":         "response.function_call_arguments.done",
+				"output_index": idx,
+				"item_id":      itemID,
+				"arguments":    tc.Arguments,
+			})
+		}
 		writeResponsesEvent(w, flusher, "response.output_item.done", map[string]any{
 			"type":         "response.output_item.done",
 			"output_index": idx,
-			"item": map[string]any{
-				"type":      "function_call",
-				"id":        itemID,
-				"call_id":   callID,
-				"name":      tc.Name,
-				"arguments": tc.Arguments,
-			},
+			"item":         responsesToolCallItem(itemID, callID, tc.Name, tc.Arguments, custom),
 		})
 	}
 
@@ -458,6 +542,8 @@ func StreamToResponses(w http.ResponseWriter, events <-chan KiroEvent, opts Resp
 		fullContent.String(),
 		allToolCalls,
 		messageItemID,
+		opts.CustomToolNames,
+		toolCallItemIDs,
 	)
 
 	usage := map[string]any{
@@ -532,20 +618,31 @@ func BuildResponsesResponse(resp *CollectedResponse, opts ResponsesNonStreamOpti
 		})
 	}
 
-	// 3. Function call items.
+	// 3. Tool call items.
 	for _, tc := range resp.ToolCalls {
-		fcID := generateOutputItemID("fc_")
+		custom := isResponsesCustomTool(tc.Name, opts.CustomToolNames)
+		itemID := responsesToolCallItemID(custom)
 		callID := tc.ID
 		if callID == "" {
 			callID = GenerateToolCallID()
 		}
-		output = append(output, models.OutputItem{
-			Type:      "function_call",
-			ID:        fcID,
-			CallID:    callID,
-			Name:      tc.Name,
-			Arguments: tc.Arguments,
-		})
+		if custom {
+			output = append(output, models.OutputItem{
+				Type:   "custom_tool_call",
+				ID:     itemID,
+				CallID: callID,
+				Name:   tc.Name,
+				Input:  customToolInput(tc.Arguments),
+			})
+		} else {
+			output = append(output, models.OutputItem{
+				Type:      "function_call",
+				ID:        itemID,
+				CallID:    callID,
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			})
+		}
 	}
 
 	// Calculate token usage.
@@ -595,6 +692,8 @@ func buildFinalOutputItems(
 	textContent string,
 	toolCalls []ToolCallInfo,
 	messageItemID string,
+	customToolNames map[string]bool,
+	toolCallItemIDs map[string]string,
 ) []map[string]any {
 	var items []map[string]any
 
@@ -623,17 +722,22 @@ func buildFinalOutputItems(
 	}
 
 	for _, tc := range toolCalls {
+		custom := isResponsesCustomTool(tc.Name, customToolNames)
 		callID := tc.ID
 		if callID == "" {
 			callID = GenerateToolCallID()
 		}
-		items = append(items, map[string]any{
-			"type":      "function_call",
-			"id":        generateOutputItemID("fc_"),
-			"call_id":   callID,
-			"name":      tc.Name,
-			"arguments": tc.Arguments,
-		})
+		itemID := toolCallItemIDs[callID]
+		if itemID == "" {
+			itemID = responsesToolCallItemID(custom)
+		}
+		items = append(items, responsesToolCallItem(
+			itemID,
+			callID,
+			tc.Name,
+			tc.Arguments,
+			custom,
+		))
 	}
 
 	if items == nil {

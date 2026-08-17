@@ -150,6 +150,35 @@ func TestBuildResponsesResponse_ToolCallsOnly(t *testing.T) {
 	}
 }
 
+func TestBuildResponsesResponse_CustomToolCall(t *testing.T) {
+	resp := &CollectedResponse{
+		ToolCalls: []ToolCallInfo{
+			{ID: "call_exec", Name: "exec", Arguments: `{"input":"return 2 + 2"}`},
+		},
+	}
+	result := BuildResponsesResponse(resp, ResponsesNonStreamOptions{
+		Model:           "m",
+		CustomToolNames: map[string]bool{"exec": true},
+	})
+
+	if len(result.Output) != 1 {
+		t.Fatalf("expected 1 output item, got %d", len(result.Output))
+	}
+	item := result.Output[0]
+	if item.Type != "custom_tool_call" {
+		t.Errorf("Type = %q, want custom_tool_call", item.Type)
+	}
+	if item.Input != "return 2 + 2" {
+		t.Errorf("Input = %q, want raw custom input", item.Input)
+	}
+	if item.Arguments != "" {
+		t.Errorf("Arguments = %q, want empty for custom tool", item.Arguments)
+	}
+	if !strings.HasPrefix(item.ID, "ctc_") {
+		t.Errorf("ID = %q, want ctc_ prefix", item.ID)
+	}
+}
+
 func TestBuildResponsesResponse_ThinkingPlusTextPlusToolCalls(t *testing.T) {
 	resp := &CollectedResponse{
 		ThinkingContent: "I should use the tool",
@@ -361,6 +390,93 @@ func TestStreamToResponses_ToolCallEventSequence(t *testing.T) {
 	requireEventType("response.function_call_arguments.done")
 	requireEventType("response.output_item.done")
 	requireEventType("response.completed")
+}
+
+func TestStreamToResponses_CustomToolCallEventSequence(t *testing.T) {
+	events := feedEvents(
+		KiroEvent{Type: EventTypeToolCallStart, ToolCall: &ToolCallInfo{ID: "call_exec", Name: "exec"}},
+		KiroEvent{Type: EventTypeToolCallDelta, ToolCall: &ToolCallInfo{ID: "call_exec", Arguments: `{"input":"return `}},
+		KiroEvent{Type: EventTypeToolCallDelta, ToolCall: &ToolCallInfo{ID: "call_exec", Arguments: `2 + 2"}`}},
+		KiroEvent{Type: EventTypeToolCallStop, ToolCall: &ToolCallInfo{ID: "call_exec", Name: "exec"}},
+		KiroEvent{Type: EventTypeToolCall, ToolCall: &ToolCallInfo{ID: "call_exec", Name: "exec", Arguments: `{"input":"return 2 + 2"}`}},
+		KiroEvent{Type: EventTypeDone},
+	)
+	rec := httptest.NewRecorder()
+	opts := defaultResponsesOpts()
+	opts.CustomToolNames = map[string]bool{"exec": true}
+	StreamToResponses(rec, events, opts)
+
+	parsed := parseResponsesSSE(rec.Body.String())
+	if got := eventsByType(parsed, "response.function_call_arguments.delta"); len(got) != 0 {
+		t.Fatalf("unexpected function argument events for custom tool: %d", len(got))
+	}
+	deltas := eventsByType(parsed, "response.custom_tool_call_input.delta")
+	if len(deltas) != 1 || deltas[0].Data["delta"] != "return 2 + 2" {
+		t.Fatalf("custom input deltas = %#v", deltas)
+	}
+	done := eventsByType(parsed, "response.custom_tool_call_input.done")
+	if len(done) != 1 || done[0].Data["input"] != "return 2 + 2" {
+		t.Fatalf("custom input done = %#v", done)
+	}
+
+	itemDone := eventsByType(parsed, "response.output_item.done")
+	if len(itemDone) != 1 {
+		t.Fatalf("expected 1 output_item.done, got %d", len(itemDone))
+	}
+	item, _ := itemDone[0].Data["item"].(map[string]any)
+	if item["type"] != "custom_tool_call" || item["input"] != "return 2 + 2" {
+		t.Fatalf("custom output item = %#v", item)
+	}
+	added := eventsByType(parsed, "response.output_item.added")
+	if len(added) != 1 {
+		t.Fatalf("expected 1 output_item.added, got %d", len(added))
+	}
+	addedItem, _ := added[0].Data["item"].(map[string]any)
+
+	completed := eventsByType(parsed, "response.completed")
+	if len(completed) != 1 {
+		t.Fatalf("expected response.completed")
+	}
+	response, _ := completed[0].Data["response"].(map[string]any)
+	output, _ := response["output"].([]any)
+	if len(output) != 1 {
+		t.Fatalf("completed output = %#v", output)
+	}
+	finalItem, _ := output[0].(map[string]any)
+	if finalItem["type"] != "custom_tool_call" || finalItem["input"] != "return 2 + 2" {
+		t.Fatalf("completed custom item = %#v", finalItem)
+	}
+	if addedItem["id"] == "" || addedItem["id"] != item["id"] || item["id"] != finalItem["id"] {
+		t.Fatalf("custom item IDs are not stable: added=%v done=%v completed=%v", addedItem["id"], item["id"], finalItem["id"])
+	}
+}
+
+func TestStreamToResponses_DuplicateToolLifecycleIDIsIgnored(t *testing.T) {
+	events := feedEvents(
+		KiroEvent{Type: EventTypeToolCallStart, ToolCall: &ToolCallInfo{ID: "call_exec", Name: "exec"}},
+		KiroEvent{Type: EventTypeToolCallDelta, ToolCall: &ToolCallInfo{ID: "call_exec", Arguments: `{"input":"return 2 + 2"}`}},
+		KiroEvent{Type: EventTypeToolCallStop, ToolCall: &ToolCallInfo{ID: "call_exec", Name: "exec"}},
+		// Kiro can repeat the lifecycle for the same ID without another input.
+		KiroEvent{Type: EventTypeToolCallStart, ToolCall: &ToolCallInfo{ID: "call_exec", Name: "exec"}},
+		KiroEvent{Type: EventTypeToolCallStop, ToolCall: &ToolCallInfo{ID: "call_exec", Name: "exec"}},
+		KiroEvent{Type: EventTypeToolCall, ToolCall: &ToolCallInfo{ID: "call_exec", Name: "exec", Arguments: `{"input":"return 2 + 2"}`}},
+		KiroEvent{Type: EventTypeDone},
+	)
+	rec := httptest.NewRecorder()
+	opts := defaultResponsesOpts()
+	opts.CustomToolNames = map[string]bool{"exec": true}
+	StreamToResponses(rec, events, opts)
+
+	parsed := parseResponsesSSE(rec.Body.String())
+	added := eventsByType(parsed, "response.output_item.added")
+	done := eventsByType(parsed, "response.output_item.done")
+	if len(added) != 1 || len(done) != 1 {
+		t.Fatalf("duplicate lifecycle emitted extra items: added=%d done=%d", len(added), len(done))
+	}
+	item, _ := done[0].Data["item"].(map[string]any)
+	if item["input"] != "return 2 + 2" {
+		t.Fatalf("custom input = %v, want complete input", item["input"])
+	}
 }
 
 func TestStreamToResponses_ToolCallArgumentsReassembled(t *testing.T) {

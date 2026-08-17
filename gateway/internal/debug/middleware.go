@@ -12,6 +12,7 @@ import (
 // Health checks, documentation, and other endpoints are not logged.
 var loggedEndpoints = map[string]bool{
 	"/v1/chat/completions": true,
+	"/v1/responses":        true,
 	"/v1/messages":         true,
 }
 
