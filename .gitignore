@@ -22,6 +22,10 @@ debug*.json
 _notes/
 requests/
 specs/
+!specs/
+specs/*
+!specs/dynamic-model-plugins/
+!specs/dynamic-model-plugins/**
 
 # Testing
 build/

@@ -34,3 +34,28 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum
+
+  plugin-check:
+    name: Plugin Check
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: plugins/go-kiro-gateway-models
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.19.0
+          cache: npm
+          cache-dependency-path: plugins/go-kiro-gateway-models/package-lock.json
+
+      - name: Install plugin dependencies
+        run: npm ci
+
+      - name: Check plugin
+        run: npm run check
