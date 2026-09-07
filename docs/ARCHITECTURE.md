@@ -350,7 +350,7 @@ make test
 ### Docker
 
 Multi-stage Dockerfile:
-- **Build stage**: `golang:1.26-alpine` — compiles static binary with `CGO_ENABLED=0`
+- **Build stage**: `golang:1.27-alpine` — compiles static binary with `CGO_ENABLED=0`
 - **Runtime stage**: `alpine:3.24` — minimal image (~10MB) with only the binary, CA certs, and curl for health checks
 
 ```bash
