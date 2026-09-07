@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { after, before, describe, it } from "node:test";
@@ -14,10 +15,9 @@ import {
 
 const execFileAsync = promisify(execFile);
 const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
-const piEntry = fileURLToPath(new URL("../../dist/pi.js", import.meta.url));
+const piCli = fileURLToPath(new URL("../../node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js", import.meta.url));
 const bunCli = fileURLToPath(new URL("../../node_modules/.bin/bun", import.meta.url));
 const ompCli = fileURLToPath(new URL("../../node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js", import.meta.url));
-const ompEntry = fileURLToPath(new URL("../../dist/omp.js", import.meta.url));
 
 interface OmpModelJson {
   provider: string;
@@ -27,6 +27,11 @@ interface OmpModelJson {
 interface OmpModelsJson {
   models: OmpModelJson[];
 }
+interface InstalledHostPackage {
+  packageDirectory: string;
+  stagingDirectory: string;
+}
+
 
 let server: Server;
 let gatewayUrl: string;
@@ -36,8 +41,23 @@ let discoveryRequests = 0;
 const inferenceModels: string[] = [];
 const authorizations: string[] = [];
 const temporaryDirectories: string[] = [];
+let installedHostPackage: InstalledHostPackage;
+
 
 before(async () => {
+  const stagingDirectory = await mkdtemp(`${tmpdir()}/go-kiro-gateway-models-package-`);
+  temporaryDirectories.push(stagingDirectory);
+  const { stdout } = await execFileAsync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", stagingDirectory], {
+    cwd: packageRoot,
+  });
+  const packResults = JSON.parse(stdout) as Array<{ filename: string }>;
+  const archive = packResults[0]?.filename;
+  assert(archive, "npm pack did not produce an archive");
+  await execFileAsync("tar", ["-xzf", join(stagingDirectory, archive), "-C", stagingDirectory]);
+  installedHostPackage = {
+    packageDirectory: join(stagingDirectory, "package"),
+    stagingDirectory,
+  };
   server = createServer(async (request, response) => {
     authorizations.push(request.headers.authorization ?? "");
     if (request.url === "/v1/models") {
@@ -85,7 +105,7 @@ function writeCompletion(response: ServerResponse, model: string): void {
   response.end("data: [DONE]\n\n");
 }
 
-function hostEnvironment(agentDirectory: string): NodeJS.ProcessEnv {
+function hostEnvironment(agentDirectory: string, homeDirectory?: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     GO_KIRO_GATEWAY_URL: gatewayUrl,
@@ -93,23 +113,48 @@ function hostEnvironment(agentDirectory: string): NodeJS.ProcessEnv {
     PI_CODING_AGENT_DIR: agentDirectory,
     PI_TELEMETRY: "0",
     NO_COLOR: "1",
+    ...(homeDirectory === undefined
+      ? {}
+      : {
+          HOME: homeDirectory,
+          XDG_CACHE_HOME: join(homeDirectory, ".cache"),
+          XDG_CONFIG_HOME: join(homeDirectory, ".config"),
+          XDG_DATA_HOME: join(homeDirectory, ".local", "share"),
+          XDG_STATE_HOME: join(homeDirectory, ".local", "state"),
+        }),
   };
 }
 
-async function runOmpModels(agentDirectory: string, args: string[]): Promise<OmpModelsJson> {
+async function installPiPackage(agentDirectory: string): Promise<void> {
+  await execFileAsync(process.execPath, [piCli, "install", installedHostPackage.packageDirectory], {
+    cwd: installedHostPackage.stagingDirectory,
+    env: hostEnvironment(agentDirectory),
+    timeout: 30_000,
+  });
+}
+
+async function installOmpPackage(agentDirectory: string, homeDirectory: string): Promise<void> {
+  await execFileAsync(bunCli, [ompCli, "plugin", "install", installedHostPackage.packageDirectory], {
+    cwd: installedHostPackage.stagingDirectory,
+    env: hostEnvironment(agentDirectory, homeDirectory),
+    timeout: 30_000,
+  });
+}
+
+async function runOmpModels(agentDirectory: string, homeDirectory: string, args: string[]): Promise<OmpModelsJson> {
   const result = await execFileAsync(bunCli, [ompCli, "models", ...args], {
     cwd: packageRoot,
-    env: hostEnvironment(agentDirectory),
+    env: hostEnvironment(agentDirectory, homeDirectory),
     timeout: 30_000,
   });
   return JSON.parse(result.stdout) as OmpModelsJson;
 }
 
-async function runOmp(agentDirectory: string, args: string[]): Promise<string> {
+async function runOmp(agentDirectory: string, homeDirectory: string, args: string[]): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const child = spawn(bunCli, [ompCli, ...args], {
       cwd: packageRoot,
-      env: hostEnvironment(agentDirectory),
+      env: hostEnvironment(agentDirectory, homeDirectory),
       stdio: ["pipe", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
@@ -137,6 +182,7 @@ function ompGatewayModels(result: OmpModelsJson): string[] {
 describe("real host integration", () => {
   it("loads the built Pi entry through a real AgentSession and refreshes host-owned models", async () => {
     const agentDirectory = await isolatedAgentDirectory("pi");
+    await installPiPackage(agentDirectory);
     const previousUrl = process.env.GO_KIRO_GATEWAY_URL;
     const previousApiKey = process.env.GO_KIRO_GATEWAY_API_KEY;
     process.env.GO_KIRO_GATEWAY_URL = gatewayUrl;
@@ -150,7 +196,6 @@ describe("real host integration", () => {
         cwd: packageRoot,
         agentDir: agentDirectory,
         resourceLoaderOptions: {
-          additionalExtensionPaths: [piEntry],
           noSkills: true,
           noPromptTemplates: true,
           noThemes: true,
@@ -227,24 +272,17 @@ describe("real host integration", () => {
 
   it("loads the built OMP entry and refreshes its host-owned catalog", async () => {
     const agentDirectory = await isolatedAgentDirectory("omp");
+    const homeDirectory = await isolatedAgentDirectory("omp");
+    await installOmpPackage(agentDirectory, homeDirectory);
     discoveryStatus = 200;
     catalog = ["host-model-a", "host-model-b"];
-    const initial = await runOmpModels(agentDirectory, [
-      "refresh",
-      "--json",
-      "--no-extensions",
-      "--extension",
-      ompEntry,
-    ]);
+    const initial = await runOmpModels(agentDirectory, homeDirectory, ["refresh", "--json"]);
     assert.deepEqual(ompGatewayModels(initial), ["host-model-a", "host-model-b"]);
 
-    const inference = await runOmp(agentDirectory, [
+    const inference = await runOmp(agentDirectory, homeDirectory, [
       "--print",
       "--no-session",
       "--no-tools",
-      "--no-extensions",
-      "--extension",
-      ompEntry,
       "--model",
       "go-kiro-gateway/host-model-a",
       "Return the mock response",
@@ -253,34 +291,17 @@ describe("real host integration", () => {
     assert.equal(inferenceModels.at(-1), "host-model-a");
 
     discoveryStatus = 503;
-    const retained = await runOmpModels(agentDirectory, [
-      "refresh",
-      "--json",
-      "--no-extensions",
-      "--extension",
-      ompEntry,
-    ]);
+    const retained = await runOmpModels(agentDirectory, homeDirectory, ["refresh", "--json"]);
     assert.deepEqual(ompGatewayModels(retained), ["host-model-a", "host-model-b"]);
 
     discoveryStatus = 200;
     catalog = ["host-model-c"];
-    const replacement = await runOmpModels(agentDirectory, [
-      "refresh",
-      "--json",
-      "--no-extensions",
-      "--extension",
-      ompEntry,
-    ]);
+    const replacement = await runOmpModels(agentDirectory, homeDirectory, ["refresh", "--json"]);
     assert.deepEqual(ompGatewayModels(replacement), ["host-model-c"]);
 
     discoveryStatus = 503;
     const requestsBeforeRestore = discoveryRequests;
-    const restored = await runOmpModels(agentDirectory, [
-      "--json",
-      "--no-extensions",
-      "--extension",
-      ompEntry,
-    ]);
+    const restored = await runOmpModels(agentDirectory, homeDirectory, ["--json"]);
     assert.deepEqual(ompGatewayModels(restored), ["host-model-c"]);
     assert.equal(discoveryRequests, requestsBeforeRestore);
   });
